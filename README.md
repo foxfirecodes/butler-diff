@@ -11,7 +11,7 @@ A native code review app for [GitButler](https://gitbutler.com/) stacks, built w
 
 ## Run
 
-Requires Rust and Git.
+Requires Git and Rust 1.98.1 (pinned in `rust-toolchain.toml`). Use `mise install` to set up the toolchain.
 
 ```sh
 cargo run -- /path/to/repository

@@ -1,3 +1,6 @@
+[settings]
+idiomatic_version_file_enable_tools = ["rust"]
+
 [tasks.build]
 description = "Build debug binary"
 run = "cargo build --locked"
