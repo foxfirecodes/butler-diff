@@ -26,6 +26,7 @@ impl Selection {
 pub struct Comparison {
     pub known_files: HashSet<String>,
     pub collapsed_files: HashSet<String>,
+    pub viewed_files: HashSet<String>,
     pub focused_file: Option<String>,
     pub file_scroll: [f32; 2],
 }
@@ -38,7 +39,9 @@ impl Comparison {
         paths
             .into_iter()
             .filter(|path| {
-                if self.known_files.contains(*path) {
+                if self.viewed_files.contains(*path) != viewed.contains(*path) {
+                    viewed.contains(*path)
+                } else if self.known_files.contains(*path) {
                     self.collapsed_files.contains(*path)
                 } else {
                     viewed.contains(*path)
@@ -180,6 +183,7 @@ mod tests {
         let comparison = Comparison {
             known_files: HashSet::from(["a.rs".into()]),
             collapsed_files: HashSet::from(["a.rs".into()]),
+            viewed_files: HashSet::new(),
             focused_file: Some("a.rs".into()),
             file_scroll: [0., -200.],
         };
@@ -211,12 +215,29 @@ mod tests {
         let saved = Comparison {
             known_files: HashSet::from(["expanded".into(), "collapsed".into(), "removed".into()]),
             collapsed_files: HashSet::from(["collapsed".into(), "removed".into()]),
+            viewed_files: HashSet::from(["expanded".into()]),
             ..Default::default()
         };
         let viewed = HashSet::from(["expanded".into(), "new".into()]);
         assert_eq!(
             saved.collapsed_for(["expanded", "collapsed", "new", "unviewed"], &viewed),
             HashSet::from(["collapsed".into(), "new".into()])
+        );
+    }
+    #[test]
+    fn reset_viewed_marks_expand_changed_files_and_new_marks_collapse_them() {
+        let saved = Comparison {
+            known_files: HashSet::from(["changed".into(), "newly-marked".into()]),
+            collapsed_files: HashSet::from(["changed".into()]),
+            viewed_files: HashSet::from(["changed".into()]),
+            ..Default::default()
+        };
+        assert_eq!(
+            saved.collapsed_for(
+                ["changed", "newly-marked"],
+                &HashSet::from(["newly-marked".into()])
+            ),
+            HashSet::from(["newly-marked".into()])
         );
     }
     #[test]

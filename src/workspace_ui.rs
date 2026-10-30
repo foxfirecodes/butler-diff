@@ -121,6 +121,7 @@ impl ReviewApp {
                 .map(|file| file.path().to_string())
                 .collect(),
             collapsed_files: self.collapsed_files.clone(),
+            viewed_files: (*self.viewed_files).clone(),
             focused_file,
             file_scroll: [offset.x.into(), offset.y.into()],
         };
