@@ -37,6 +37,15 @@ description = "Build, sign, and open the release app"
 depends = ["sign"]
 run = "open 'target/release/Butler Diff.app' --args"
 
+[tasks.app-dev]
+description = "Build the separate Butler Diff Dev.app"
+run = "sh scripts/bundle-macos.sh debug dev"
+
+[tasks.dev]
+description = "Rebuild and restart Butler Diff Dev in the background (optional repository argument)"
+depends = ["app-dev"]
+run = "sh scripts/run-dev.sh"
+
 [tasks.verify-signature]
 description = "Verify the release app signature"
 run = "codesign --verify --deep --strict --verbose=2 'target/release/Butler Diff.app'"

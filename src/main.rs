@@ -1,6 +1,7 @@
 mod comments;
 mod file_groups;
 mod jump;
+mod launch;
 mod mcp;
 mod navigation;
 mod repository;
@@ -206,6 +207,7 @@ fn sticky_layer(
 }
 
 struct ReviewApp {
+    development: bool,
     history: navigation::History,
     pending_navigation: Option<navigation::Visit>,
     session: session::Session,
@@ -320,6 +322,7 @@ impl ReviewApp {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut view = Self {
+            development: launch::is_development(),
             history: navigation::History::default(),
             pending_navigation: None,
             session,
@@ -1957,7 +1960,7 @@ impl Render for ReviewApp {
                                 cx.notify();
                             })),
                     )
-                    .child(div().font_weight(FontWeight::BOLD).child("butler diff"))
+                    .child(div().font_weight(FontWeight::BOLD).child(if self.development { "butler diff dev" } else { "butler diff" }))
                     .child(Button::new("jump").small().label("Jump… ⌘K")
                         .accessibility_label("Jump to file, branch, or stack")
                         .on_click(cx.listener(|view, _, window, cx| view.open_jump(window, cx))))
@@ -2154,6 +2157,7 @@ fn main() -> anyhow::Result<()> {
     let mut inspect = false;
     let mut serve_mcp = false;
     let mut author = None;
+    let mut background = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -2164,6 +2168,7 @@ fn main() -> anyhow::Result<()> {
                 )
             }
             "--inspect" => inspect = true,
+            "--background" => background = true,
             "--mcp" => serve_mcp = true,
             "--author" => {
                 author = Some(
@@ -2173,7 +2178,7 @@ fn main() -> anyhow::Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "butler-diff [REPOSITORY] [--base REF] [--inspect | --mcp [--author NAME]]\n\nNative GitButler stack reviews.\nClick a branch; shift-click another for a range; click a stack header for the whole stack.\n--inspect prints repository/stack endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
+                    "butler-diff [REPOSITORY] [--base REF] [--background | --inspect | --mcp [--author NAME]]\n\nNative GitButler stack reviews.\nClick a branch; shift-click another for a range; click a stack header for the whole stack.\n--background opens a window without activating the app.\n--inspect prints repository/stack endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
                 );
                 return Ok(());
             }
@@ -2201,6 +2206,9 @@ fn main() -> anyhow::Result<()> {
     if author.is_some() && !serve_mcp {
         anyhow::bail!("--author is only valid with --mcp");
     }
+    if background && (serve_mcp || inspect) {
+        anyhow::bail!("--background is only valid for the GUI");
+    }
     if serve_mcp {
         Repository::load(&path, base.as_deref())?;
         return mcp::Server::new(path, base, author).run();
@@ -2210,6 +2218,8 @@ fn main() -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&repo)?);
         return Ok(());
     }
+    let development = launch::is_development();
+    let background = background || development;
     application().with_assets(assets::Assets).run(move |cx| {
         init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
@@ -2241,10 +2251,18 @@ fn main() -> anyhow::Result<()> {
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         open_window(
             WindowOptions {
+                focus: !background,
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(1000.), px(600.))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("butler diff".into()),
+                    title: Some(
+                        if development {
+                            "butler diff dev"
+                        } else {
+                            "butler diff"
+                        }
+                        .into(),
+                    ),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -2253,7 +2271,9 @@ fn main() -> anyhow::Result<()> {
             move |window, cx| cx.new(|cx| ReviewApp::new(path, base, window, cx)),
         )
         .expect("Couldn't open app window");
-        cx.activate(true);
+        if !background {
+            cx.activate(true);
+        }
     });
     Ok(())
 }

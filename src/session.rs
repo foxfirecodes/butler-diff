@@ -122,13 +122,24 @@ pub fn state_path() -> Option<PathBuf> {
         return Some(PathBuf::from(dir).join("session.json"));
     }
     let home = PathBuf::from(std::env::var_os("HOME")?);
+    let development = crate::launch::is_development();
     #[cfg(target_os = "macos")]
-    let dir = home.join("Library/Application Support/Butler Diff");
+    let dir = home
+        .join("Library/Application Support")
+        .join(if development {
+            "Butler Diff Dev"
+        } else {
+            "Butler Diff"
+        });
     #[cfg(not(target_os = "macos"))]
     let dir = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".local/state"))
-        .join("butler-diff");
+        .join(if development {
+            "butler-diff-dev"
+        } else {
+            "butler-diff"
+        });
     Some(dir.join("session.json"))
 }
 
