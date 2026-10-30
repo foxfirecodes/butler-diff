@@ -8,7 +8,7 @@ use gpui_kit::component::{
 enum Target {
     File(String),
     Branch(String, String),
-    Stack(Selection),
+    Stack(Selection, Vec<String>),
 }
 
 impl ReviewApp {
@@ -54,11 +54,18 @@ impl ReviewApp {
                             last.name,
                             stack.branches.len()
                         ),
-                        Target::Stack(Selection {
-                            stack: stack.id.clone(),
-                            anchor: first.name.clone(),
-                            end: last.name.clone(),
-                        }),
+                        Target::Stack(
+                            Selection {
+                                stack: stack.id.clone(),
+                                anchor: first.name.clone(),
+                                end: last.name.clone(),
+                            },
+                            stack
+                                .branches
+                                .iter()
+                                .map(|branch| branch.name.clone())
+                                .collect(),
+                        ),
                     ));
                 }
             }
@@ -113,7 +120,7 @@ impl ReviewApp {
                                     Target::Branch(stack, branch) => {
                                         view.select(stack, branch, false, cx)
                                     }
-                                    Target::Stack(selection) => {
+                                    Target::Stack(selection, _) => {
                                         view.remember_comparison(cx);
                                         view.selection = Some(selection);
                                         view.load_diff(cx);
@@ -127,10 +134,11 @@ impl ReviewApp {
                         command = command.group(CommandGroup::new().label(heading.clone()).items(
                             entries.iter().map(|(label, target)| {
                                 let keywords = match target {
-                                    Target::File(path) => path.clone(),
-                                    _ => label.clone(),
+                                    Target::File(path) => vec![path.clone()],
+                                    Target::Stack(_, branches) => branches.clone(),
+                                    Target::Branch(_, _) => vec![label.clone()],
                                 };
-                                CommandItem::new().label(label.clone()).keywords([keywords])
+                                CommandItem::new().label(label.clone()).keywords(keywords)
                             }),
                         ));
                     }
