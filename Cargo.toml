@@ -1,0 +1,37 @@
+[package]
+name = "butler-diff"
+version = "0.1.0"
+edition = "2024"
+description = "A fast, read-only GitButler stack review tool"
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+gpui-kit = { version = "0.8.1", features = ["syntect"] }
+gpui-fps = "0.8.1"
+notify = "8.2"
+regex = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+
+[profile.dev]
+debug = 0
+
+# Keep edit/build cycles quick while compiling the rendering hot paths properly.
+[profile.dev.package]
+gpui-pre = { opt-level = 3 }
+gpui-base = { opt-level = 3 }
+gpui-component = { opt-level = 3 }
+taffy = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+
+[patch.crates-io]
+# Keep the fork's workspace crates on one source to avoid duplicate GPUI types.
+gpui-kit = { git = "https://github.com/foxfirecodes/gpui-kit", rev = "7a70b640bbf9e4c062c6aaa27cca83c9a68f4542" }
+gpui-component = { git = "https://github.com/foxfirecodes/gpui-kit", rev = "7a70b640bbf9e4c062c6aaa27cca83c9a68f4542" }
+gpui-base = { git = "https://github.com/foxfirecodes/gpui-kit", rev = "7a70b640bbf9e4c062c6aaa27cca83c9a68f4542" }
+gpui-component-macros = { git = "https://github.com/foxfirecodes/gpui-kit", rev = "7a70b640bbf9e4c062c6aaa27cca83c9a68f4542" }
+gpui-kit-assets = { git = "https://github.com/foxfirecodes/gpui-kit", rev = "7a70b640bbf9e4c062c6aaa27cca83c9a68f4542" }
+gpui-fps = { git = "https://github.com/foxfirecodes/gpui-kit", rev = "7a70b640bbf9e4c062c6aaa27cca83c9a68f4542" }
