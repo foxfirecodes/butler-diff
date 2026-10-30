@@ -440,6 +440,7 @@ impl ReviewApp {
     }
 
     fn clear_viewed(&mut self) {
+        self.focused_file = None;
         self.current_comment_ids.clear();
         self.viewed_files = Arc::default();
         self.viewed_error = None;

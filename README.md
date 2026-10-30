@@ -40,4 +40,4 @@ Add this to your MCP client configuration, replacing both paths:
 
 Agents can read stacks/diffs and create, reply to, edit, delete, or resolve comments. Changes appear live in the app. Restart the MCP connection after rebuilding.
 
-Reviews committed changes only. Settings, viewed state, and comments stay local in Git’s common directory (normally `.git`). Working files and Git history are untouched.
+Reviews committed changes only. Repo settings, viewed state, and comments live in Git’s common directory (normally `.git`); UI state lives in the app data directory. Working files and Git history are untouched.
