@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::component::Icon;
 
 impl ReviewApp {
     pub(super) fn reload_comments(&mut self, cx: &mut Context<Self>) {
@@ -392,6 +393,7 @@ impl ReviewApp {
         let resolve_id = thread.id.clone();
         let resolved = thread.resolved;
         let current = self.thread_current(thread);
+        let comment_accent = hsla(0.76, 0.18, 0.72, 1.0);
         let loc = &thread.anchor.location;
         let line_label = format!(
             "{} L{}{}",
@@ -485,130 +487,178 @@ impl ReviewApp {
                         .min_w_0()
                         .overflow_x_scroll()
                         .p_2()
+                        .rounded_md()
+                        .bg(cx.theme().muted.opacity(0.35))
                         .text_xs()
                         .font_family("monospace")
                         .whitespace_nowrap()
                         .child(thread.anchor.excerpt.clone()),
                 )
             })
-            .children(thread.messages.iter().map(|message| {
-                let edit_id = message.id.clone();
-                let delete_id = message.id.clone();
-                let deleted = message.deleted_at.is_some();
+            .child(
                 div()
                     .w_full()
                     .min_w_0()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .child(
+                    .children(thread.messages.iter().enumerate().map(|(index, message)| {
+                        let edit_id = message.id.clone();
+                        let delete_id = message.id.clone();
+                        let deleted = message.deleted_at.is_some();
                         div()
                             .w_full()
                             .min_w_0()
+                            .p_3()
+                            .bg(if index == 0 {
+                                comment_accent.opacity(0.07)
+                            } else if index % 2 == 1 {
+                                cx.theme().muted.opacity(0.25)
+                            } else {
+                                cx.theme().background
+                            })
+                            .when(index > 0, |message| {
+                                message.border_t_1().border_color(cx.theme().border)
+                            })
                             .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .justify_between()
+                            .flex_col()
                             .gap_2()
                             .child(
                                 div()
+                                    .w_full()
                                     .min_w_0()
-                                    .flex_1()
-                                    .text_xs()
-                                    .font_weight(FontWeight::BOLD)
-                                    .child(format!(
-                                        "{}{}",
-                                        message.author,
-                                        if message.edited_at.is_some() {
-                                            " · edited"
-                                        } else {
-                                            ""
-                                        }
-                                    )),
-                            )
-                            .child(
-                                div()
                                     .flex()
-                                    .flex_shrink_0()
-                                    .gap_1()
-                                    .when(!deleted, |controls| {
-                                        controls.child(
-                                            Button::new(SharedString::from(format!(
-                                                "edit:{}",
-                                                message.id
-                                            )))
-                                            .ghost()
-                                            .xsmall()
-                                            .label("Edit")
-                                            .disabled(self.comment_pending)
-                                            .accessibility_label(format!(
-                                                "Edit message by {}",
-                                                message.author
-                                            ))
-                                            .on_click(cx.listener(move |view, _, window, cx| {
-                                                view.start_comment_draft(
-                                                    CommentTarget::Edit(edit_id.clone()),
-                                                    window,
-                                                    cx,
-                                                )
-                                            })),
-                                        )
-                                    })
+                                    .flex_wrap()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
                                     .child(
-                                        Button::new(SharedString::from(format!(
-                                            "delete:{}",
-                                            message.id
-                                        )))
-                                        .ghost()
-                                        .xsmall()
-                                        .label(if deleted { "Undo delete" } else { "Delete" })
-                                        .disabled(self.comment_pending)
-                                        .accessibility_label(format!(
-                                            "{} message by {}",
-                                            if deleted { "Restore" } else { "Delete" },
-                                            message.author
-                                        ))
-                                        .on_click(
-                                            cx.listener(move |view, _, _, cx| {
-                                                view.delete_comment_message(
-                                                    delete_id.clone(),
-                                                    !deleted,
-                                                    cx,
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .flex()
+                                            .flex_wrap()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Icon::default()
+                                                    .data(if index == 0 {
+                                                        include_bytes!("../assets/comment.svg")
+                                                    } else {
+                                                        include_bytes!("../assets/reply.svg")
+                                                    })
+                                                    .small()
+                                                    .flex_shrink_0()
+                                                    .text_color(if index == 0 {
+                                                        comment_accent
+                                                    } else {
+                                                        comment_accent.opacity(0.75)
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .child(message.author.clone()),
+                                            )
+                                            .when(message.edited_at.is_some(), |heading| {
+                                                heading.child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child("edited"),
                                                 )
                                             }),
-                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_shrink_0()
+                                            .gap_1()
+                                            .when(!deleted, |controls| {
+                                                controls.child(
+                                                    Button::new(SharedString::from(format!(
+                                                        "edit:{}",
+                                                        message.id
+                                                    )))
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .label("Edit")
+                                                    .disabled(self.comment_pending)
+                                                    .accessibility_label(format!(
+                                                        "Edit message by {}",
+                                                        message.author
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |view, _, window, cx| {
+                                                            view.start_comment_draft(
+                                                                CommentTarget::Edit(
+                                                                    edit_id.clone(),
+                                                                ),
+                                                                window,
+                                                                cx,
+                                                            )
+                                                        },
+                                                    )),
+                                                )
+                                            })
+                                            .child(
+                                                Button::new(SharedString::from(format!(
+                                                    "delete:{}",
+                                                    message.id
+                                                )))
+                                                .ghost()
+                                                .xsmall()
+                                                .label(if deleted {
+                                                    "Undo delete"
+                                                } else {
+                                                    "Delete"
+                                                })
+                                                .disabled(self.comment_pending)
+                                                .accessibility_label(format!(
+                                                    "{} message by {}",
+                                                    if deleted { "Restore" } else { "Delete" },
+                                                    message.author
+                                                ))
+                                                .on_click(cx.listener(move |view, _, _, cx| {
+                                                    view.delete_comment_message(
+                                                        delete_id.clone(),
+                                                        !deleted,
+                                                        cx,
+                                                    )
+                                                })),
+                                            ),
                                     ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .whitespace_normal()
-                            .text_sm()
-                            .child(if deleted {
-                                div()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Message deleted")
+                            )
+                            .child(div().min_w_0().whitespace_normal().text_sm().child(
+                                if deleted {
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Message deleted")
+                                        .into_any_element()
+                                } else {
+                                    TextView::markdown(
+                                        SharedString::from(format!("message-body:{}", message.id)),
+                                        message.body.clone(),
+                                    )
+                                    .w_full()
+                                    .min_w_0()
+                                    .on_link_click(|url, _, _, cx| {
+                                        if url.starts_with("https://")
+                                            || url.starts_with("http://")
+                                            || url.starts_with("mailto:")
+                                        {
+                                            cx.open_url(url);
+                                        }
+                                    })
                                     .into_any_element()
-                            } else {
-                                TextView::markdown(
-                                    SharedString::from(format!("message-body:{}", message.id)),
-                                    message.body.clone(),
-                                )
-                                .w_full()
-                                .min_w_0()
-                                .on_link_click(|url, _, _, cx| {
-                                    if url.starts_with("https://")
-                                        || url.starts_with("http://")
-                                        || url.starts_with("mailto:")
-                                    {
-                                        cx.open_url(url);
-                                    }
-                                })
-                                .into_any_element()
-                            }),
-                    )
-            }))
+                                },
+                            ))
+                    })),
+            )
             .child(
                 div()
                     .flex()
