@@ -227,6 +227,7 @@ struct ReviewApp {
     viewed_files: Arc<HashSet<String>>,
     pending_views: HashSet<String>,
     comments: Vec<comments::Thread>,
+    comment_views: HashMap<String, review_ui::ThreadView>,
     current_comment_ids: HashSet<String>,
     comment_draft: Option<CommentDraft>,
     comment_drafts: HashMap<CommentDraftKey, String>,
@@ -335,6 +336,7 @@ impl ReviewApp {
             viewed_files: Arc::default(),
             pending_views: HashSet::new(),
             comments: vec![],
+            comment_views: HashMap::new(),
             current_comment_ids: HashSet::new(),
             comment_draft: None,
             comment_drafts: HashMap::new(),
@@ -863,6 +865,7 @@ impl ReviewApp {
                         view.base_override = None;
                         view.repo = None;
                         view.comments.clear();
+                        view.comment_views.clear();
                         view.current_comment_ids.clear();
                         view.comment_generation += 1;
                         view.selection = None;

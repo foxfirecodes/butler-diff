@@ -1,6 +1,12 @@
 use super::*;
 use gpui_kit::component::Icon;
 
+#[derive(Clone, Copy)]
+pub(super) struct ThreadView {
+    resolved: bool,
+    collapsed: bool,
+}
+
 impl ReviewApp {
     pub(super) fn reload_comments(&mut self, cx: &mut Context<Self>) {
         self.comment_generation += 1;
@@ -27,6 +33,13 @@ impl ReviewApp {
                 }
                 match result {
                     Ok(threads) => {
+                        let resolutions: HashMap<_, _> = threads
+                            .iter()
+                            .map(|thread| (thread.id.as_str(), thread.resolved))
+                            .collect();
+                        view.comment_views.retain(|id, state| {
+                            resolutions.get(id.as_str()) == Some(&state.resolved)
+                        });
                         view.comments = threads;
                         view.sync_comment_anchors();
                     }
@@ -62,6 +75,25 @@ impl ReviewApp {
 
     fn thread_current(&self, thread: &comments::Thread) -> bool {
         self.current_comment_ids.contains(&thread.id)
+    }
+
+    fn thread_collapsed(&self, thread: &comments::Thread) -> bool {
+        self.comment_views
+            .get(&thread.id)
+            .filter(|state| state.resolved == thread.resolved)
+            .map_or(thread.resolved, |state| state.collapsed)
+    }
+
+    fn toggle_comment_thread(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(thread) = self.comments.iter().find(|thread| thread.id == id) else {
+            return;
+        };
+        let state = ThreadView {
+            resolved: thread.resolved,
+            collapsed: !self.thread_collapsed(thread),
+        };
+        self.comment_views.insert(id.to_owned(), state);
+        cx.notify();
     }
 
     pub(super) fn begin_comment(
@@ -314,7 +346,7 @@ impl ReviewApp {
         let mut seen = HashSet::new();
         self.comments
             .iter()
-            .filter(|thread| !thread.resolved && self.thread_current(thread))
+            .filter(|thread| self.thread_current(thread))
             .filter_map(|thread| {
                 let location = &thread.anchor.location;
                 let position = DiffLinePosition::new(
@@ -345,8 +377,7 @@ impl ReviewApp {
             .iter()
             .filter(|thread| {
                 let loc = &thread.anchor.location;
-                !thread.resolved
-                    && self.thread_current(thread)
+                self.thread_current(thread)
                     && loc.path == position.path().as_str()
                     && loc.side == position.side().into()
                     && loc.end_line == position.line()
@@ -412,6 +443,109 @@ impl ReviewApp {
         let label = format!("{} · {line_label}", loc.path);
         let jump_thread = thread.clone();
         let (directory, filename) = loc.path.rsplit_once('/').unwrap_or(("", &loc.path));
+        let toggle_id = thread.id.clone();
+        let status = if resolved { "Resolved" } else { "Open" };
+        let message_count = thread
+            .messages
+            .iter()
+            .filter(|message| message.deleted_at.is_none())
+            .count();
+        let message_label = format!(
+            "{message_count} {}",
+            if message_count == 1 {
+                "message"
+            } else {
+                "messages"
+            }
+        );
+        if self.thread_collapsed(thread) {
+            let preview = thread
+                .messages
+                .iter()
+                .find(|message| message.deleted_at.is_none())
+                .and_then(|message| message.body.lines().find(|line| !line.trim().is_empty()))
+                .unwrap_or("Message deleted");
+            return div()
+                .id(SharedString::from(format!(
+                    "comment:{}:{in_panel}",
+                    thread.id
+                )))
+                .w_full()
+                .min_w_0()
+                .flex_shrink_0()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().background)
+                .px_2()
+                .py_1()
+                .child(
+                    Button::new("toggle-thread")
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .min_w_0()
+                        .accessibility_label(format!(
+                            "Expand {} comment thread on {} line {}",
+                            status.to_lowercase(),
+                            loc.path,
+                            loc.end_line
+                        ))
+                        .tooltip(format!("{label} · {message_label}"))
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child("▸")
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_xs()
+                                        .text_color(if resolved {
+                                            rgb(0x83b895).into()
+                                        } else {
+                                            comment_accent
+                                        })
+                                        .child(if resolved { "✓ Resolved" } else { "Open" }),
+                                )
+                                .when(in_panel, |row| {
+                                    row.child(
+                                        div()
+                                            .min_w_0()
+                                            .max_w(px(150.))
+                                            .text_xs()
+                                            .text_ellipsis()
+                                            .child(format!("{filename}:{}", loc.end_line)),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .text_left()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(preview.to_owned()),
+                                )
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(message_count.to_string()),
+                                ),
+                        )
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.toggle_comment_thread(&toggle_id, cx)
+                        })),
+                )
+                .into_any_element();
+        }
         div()
             .id(SharedString::from(format!(
                 "comment:{}:{in_panel}",
@@ -429,6 +563,49 @@ impl ReviewApp {
             .min_w_0()
             .flex_shrink_0()
             .whitespace_normal()
+            .child(
+                Button::new("toggle-thread")
+                    .ghost()
+                    .xsmall()
+                    .w_full()
+                    .min_w_0()
+                    .h_auto()
+                    .accessibility_label(format!(
+                        "Collapse {} comment thread on {} line {}",
+                        status.to_lowercase(),
+                        loc.path,
+                        loc.end_line
+                    ))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("▾")
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .whitespace_normal()
+                                    .text_left()
+                                    .child(format!(
+                                        "{status} · {message_label}{} · thread {}",
+                                        if !current {
+                                            " · older/different comparison"
+                                        } else {
+                                            ""
+                                        },
+                                        &thread.id[..8]
+                                    )),
+                            ),
+                    )
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.toggle_comment_thread(&toggle_id, cx)
+                    })),
+            )
             .when(in_panel, |card| {
                 card.child(
                     Button::new("jump")
@@ -464,21 +641,6 @@ impl ReviewApp {
                         })),
                 )
             })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "{}{} · thread {}",
-                        if resolved { "Resolved" } else { "Open" },
-                        if !current {
-                            " · older/different comparison"
-                        } else {
-                            ""
-                        },
-                        &thread.id[..8]
-                    )),
-            )
             .when(in_panel && !current, |card| {
                 card.child(
                     div()
