@@ -697,7 +697,8 @@ impl ReviewApp {
             .h_full()
             .flex()
             .flex_col()
-            .border_l_1()
+            .when(self.sidebars_swapped, |sidebar| sidebar.border_r_1())
+            .when(!self.sidebars_swapped, |sidebar| sidebar.border_l_1())
             .border_color(cx.theme().border)
             .child(
                 div()

@@ -144,6 +144,7 @@ impl ReviewApp {
         state.split = self.mode == DiffMode::Split;
         state.show_comments = self.show_comments;
         state.show_branches = self.show_branches;
+        state.sidebars_swapped = self.sidebars_swapped;
         state.branch_width = self.branch_sidebar_width.into();
         state.file_width = self.file_panel_width;
         state.comment_width = self.comment_panel_width;
@@ -169,6 +170,7 @@ impl ReviewApp {
         };
         self.show_comments = state.show_comments;
         self.show_branches = state.show_branches;
+        self.sidebars_swapped = state.sidebars_swapped;
         self.branch_sidebar_width = px(state.branch_width.clamp(200., 600.));
         self.file_panel_width = state.file_width.clamp(220., 750.);
         self.comment_panel_width = state.comment_width.clamp(260., 650.);

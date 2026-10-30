@@ -235,6 +235,7 @@ struct ReviewApp {
     comment_generation: u64,
     show_comments: bool,
     show_branches: bool,
+    sidebars_swapped: bool,
     branch_sidebar_width: Pixels,
     viewed_error: Option<String>,
     viewed_epoch: u64,
@@ -289,15 +290,7 @@ impl ReviewApp {
         let diff = cx.new(|cx| DiffState::new([], cx));
         let panels = cx.new(|_| ResizableState::default());
         let panel_sub = cx.subscribe(&panels, |view, panels, _: &ResizablePanelEvent, cx| {
-            let sizes = panels.read(cx).sizes();
-            if let Some(width) = sizes.first() {
-                view.file_panel_width = (*width).into();
-            }
-            if view.show_comments
-                && let Some(width) = sizes.get(2)
-            {
-                view.comment_panel_width = (*width).into();
-            }
+            view.remember_panel_widths(panels.read(cx).sizes());
             cx.notify();
         });
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter changed files…"));
@@ -350,6 +343,7 @@ impl ReviewApp {
             comment_generation: 0,
             show_comments: false,
             show_branches: true,
+            sidebars_swapped: false,
             branch_sidebar_width: px(300.),
             viewed_error: None,
             viewed_epoch: 0,
@@ -892,23 +886,7 @@ impl ReviewApp {
                         view.files.clear();
                         view.clear_viewed();
                         view.restore_repo_ui(window, cx);
-                        view.panels = cx.new(|_| ResizableState::default());
-                        let panel_sub = cx.subscribe(
-                            &view.panels,
-                            |view, panels, _: &ResizablePanelEvent, cx| {
-                                let sizes = panels.read(cx).sizes();
-                                if let Some(width) = sizes.first() {
-                                    view.file_panel_width = (*width).into();
-                                }
-                                if view.show_comments
-                                    && let Some(width) = sizes.get(2)
-                                {
-                                    view.comment_panel_width = (*width).into();
-                                }
-                                cx.notify();
-                            },
-                        );
-                        view._subscriptions.push(panel_sub);
+                        view.reset_panel_layout(cx);
                         view.diff.update(cx, |state, cx| state.set_files([], cx));
                         view.refresh(cx);
                     });
@@ -923,6 +901,66 @@ impl ReviewApp {
             _ => {}
         })
         .detach();
+    }
+
+    fn remember_panel_widths(&mut self, sizes: &[Pixels]) {
+        let file_index = if self.sidebars_swapped {
+            if self.show_comments { 2 } else { 1 }
+        } else {
+            0
+        };
+        if let Some(width) = sizes.get(file_index) {
+            self.file_panel_width = (*width).into();
+        }
+        if self.show_comments {
+            let comment_index = if self.sidebars_swapped { 0 } else { 2 };
+            if let Some(width) = sizes.get(comment_index) {
+                self.comment_panel_width = (*width).into();
+            }
+        }
+    }
+
+    fn capture_panel_widths(&mut self, cx: &App) {
+        let panels = self.panels.clone();
+        self.remember_panel_widths(panels.read(cx).sizes());
+    }
+
+    fn reset_panel_layout(&mut self, cx: &mut Context<Self>) {
+        // The resize library caches sizes by slot. Recreate those slots after
+        // changing their order or visibility, using each pane's saved width.
+        self.panels
+            .update(cx, |panels, _| *panels = ResizableState::default());
+    }
+
+    fn review_panels(&self, body: AnyElement, cx: &mut Context<Self>) -> impl IntoElement {
+        let files = Some(
+            resizable_panel()
+                .size(px(self.file_panel_width))
+                .fixed()
+                .size_range(px(220.)..px(750.))
+                .child(self.file_sidebar(cx)),
+        );
+        let comments = self.show_comments.then(|| {
+            resizable_panel()
+                .size(px(self.comment_panel_width))
+                .fixed()
+                .size_range(px(260.)..px(650.))
+                .child(self.comments_panel(cx))
+        });
+        let (left, right) = if self.sidebars_swapped {
+            (comments, files)
+        } else {
+            (files, comments)
+        };
+        h_resizable("file-diff-panels")
+            .with_state(&self.panels)
+            .when_some(left, |panels, left| panels.child(left))
+            .child(
+                resizable_panel()
+                    .size_range(px(300.)..Pixels::MAX)
+                    .child(body),
+            )
+            .when_some(right, |panels, right| panels.child(right))
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1624,7 +1662,8 @@ impl ReviewApp {
             .h_full()
             .flex()
             .flex_col()
-            .border_r_1()
+            .when(self.sidebars_swapped, |sidebar| sidebar.border_l_1())
+            .when(!self.sidebars_swapped, |sidebar| sidebar.border_r_1())
             .border_color(cx.theme().border)
             .child(
                 div()
@@ -2084,8 +2123,24 @@ impl Render for ReviewApp {
                                             .selected(self.show_comments)
                                             .label(format!("Comments ({})", self.comments.iter().filter(|t| !t.resolved).count()))
                                             .on_click(cx.listener(|view, _, _, cx| {
+                                                view.capture_panel_widths(cx);
                                                 view.show_comments = !view.show_comments;
+                                                view.reset_panel_layout(cx);
                                                 view.reload_comments(cx);
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("swap-sidebars")
+                                            .small()
+                                            .label("Swap sidebars")
+                                            .selected(self.sidebars_swapped)
+                                            .accessibility_label("Swap file and comment sidebars")
+                                            .tooltip(if self.sidebars_swapped { "Move files left and comments right" } else { "Move comments left and files right" })
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.capture_panel_widths(cx);
+                                                view.sidebars_swapped = !view.sidebars_swapped;
+                                                view.reset_panel_layout(cx);
                                                 cx.notify();
                                             })),
                                     )
@@ -2104,23 +2159,7 @@ impl Render for ReviewApp {
                             })
                             .child(
                                 div().flex_1().min_h_0().child(
-                                    h_resizable("file-diff-panels")
-                                        .with_state(&self.panels)
-                                        .child(
-                                            resizable_panel()
-                                                .size(px(self.file_panel_width))
-                                                .fixed()
-                                                .size_range(px(220.)..px(750.))
-                                                .child(self.file_sidebar(cx)),
-                                        )
-                                        .child(
-                                            resizable_panel()
-                                                .size_range(px(300.)..Pixels::MAX)
-                                                .child(body),
-                                        )
-                                        .when(self.show_comments, |panels| {
-                                            panels.child(resizable_panel().size(px(self.comment_panel_width)).fixed().size_range(px(260.)..px(650.)).child(self.comments_panel(cx)))
-                                        }),
+                                    self.review_panels(body.into_any_element(), cx),
                                 ),
                             ),
                     ),
