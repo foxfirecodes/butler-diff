@@ -375,10 +375,7 @@ impl ReviewApp {
         }
         self.comment_error = None;
         let loc = &thread.anchor.location;
-        self.collapsed_groups
-            .remove(&file_groups::group_key(&loc.path, &self.groups));
-        self.collapsed_files.remove(&loc.path);
-        self.sync_diff_files(cx);
+        self.visit_file(&loc.path, cx);
         let position = DiffLinePosition::new(loc.path.clone(), loc.side.into(), loc.end_line);
         self.diff
             .update(cx, |state, cx| state.scroll_to_line(position, cx));

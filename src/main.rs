@@ -1,6 +1,7 @@
 mod comments;
 mod file_groups;
 mod mcp;
+mod navigation;
 mod repository;
 mod review_ui;
 mod session;
@@ -44,7 +45,15 @@ use watch::{Changes, RepoWatcher};
 
 actions!(
     butler_diff,
-    [Refresh, OpenRepository, ToggleStats, SubmitComment, Quit]
+    [
+        Refresh,
+        OpenRepository,
+        ToggleStats,
+        SubmitComment,
+        NavigateBack,
+        NavigateForward,
+        Quit
+    ]
 );
 
 struct GroupDraft {
@@ -194,6 +203,8 @@ fn sticky_layer(
 }
 
 struct ReviewApp {
+    history: navigation::History,
+    pending_navigation: Option<navigation::Visit>,
     session: session::Session,
     session_store: Option<session::Store>,
     session_task: Option<Task<()>>,
@@ -306,6 +317,8 @@ impl ReviewApp {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut view = Self {
+            history: navigation::History::default(),
+            pending_navigation: None,
             session,
             session_store,
             session_task: None,
@@ -795,6 +808,11 @@ impl ReviewApp {
                         if let Some(saved) = saved {
                             view.restore_comparison_position(saved, cx);
                         }
+                        if let Some(visit) = view.pending_navigation.take()
+                            && view.selection.as_ref() == Some(&visit.selection)
+                        {
+                            view.reveal_file(&visit.file, cx);
+                        }
                         // Reconcile a mark completed while this diff was loading.
                         if view.viewed_epoch != viewed_epoch {
                             view.reload_viewed(cx);
@@ -839,6 +857,8 @@ impl ReviewApp {
                         view.snapshot_session(cx);
                         view.stash_comment_draft(cx);
                         view.path = path;
+                        view.history = navigation::History::default();
+                        view.pending_navigation = None;
                         view.base_override = None;
                         view.repo = None;
                         view.comments.clear();
@@ -1285,10 +1305,7 @@ impl ReviewApp {
                     .child(button),
             )
             .on_click(cx.listener(move |view, _, _, cx| {
-                view.focused_file = Some(path.clone());
-                view.diff
-                    .update(cx, |state, cx| state.scroll_to_file(&path, cx));
-                cx.notify();
+                view.visit_file(&path, cx);
             }))
     }
 
@@ -1897,6 +1914,8 @@ impl Render for ReviewApp {
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(|view, _: &Refresh, _, cx| view.refresh(cx)))
+            .on_action(cx.listener(|view, _: &NavigateBack, _, cx| view.navigate_history(false, cx)))
+            .on_action(cx.listener(|view, _: &NavigateForward, _, cx| view.navigate_history(true, cx)))
             .on_action(cx.listener(|view, _: &OpenRepository, _, cx| view.open(cx)))
             .on_action(cx.listener(|view, _: &ToggleStats, _, cx| {
                 view.show_stats = !view.show_stats;
@@ -1910,6 +1929,16 @@ impl Render for ReviewApp {
                     .flex()
                     .items_center()
                     .gap_3()
+                    .child(Button::new("history-back").ghost().small().label("←")
+                        .accessibility_label("Back to previous file")
+                        .tooltip("Back · ⌥← / ⌥[")
+                        .disabled(!self.history.can_back())
+                        .on_click(cx.listener(|view, _, _, cx| view.navigate_history(false, cx))))
+                    .child(Button::new("history-forward").ghost().small().label("→")
+                        .accessibility_label("Forward to next file")
+                        .tooltip("Forward · ⌥→ / ⌥]")
+                        .disabled(!self.history.can_forward())
+                        .on_click(cx.listener(|view, _, _, cx| view.navigate_history(true, cx))))
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
@@ -2178,6 +2207,12 @@ fn main() -> anyhow::Result<()> {
         Theme::change(ThemeMode::Dark, None, cx);
         cx.bind_keys([
             KeyBinding::new("cmd-r", Refresh, Some("Review")),
+            KeyBinding::new("alt-left", NavigateBack, Some("Review")),
+            KeyBinding::new("alt-right", NavigateForward, Some("Review")),
+            KeyBinding::new("alt-[", NavigateBack, Some("Review")),
+            KeyBinding::new("alt-]", NavigateForward, Some("Review")),
+            KeyBinding::new("cmd-[", NavigateBack, Some("Review")),
+            KeyBinding::new("cmd-]", NavigateForward, Some("Review")),
             KeyBinding::new("ctrl-r", Refresh, Some("Review")),
             KeyBinding::new("cmd-o", OpenRepository, Some("Review")),
             KeyBinding::new("cmd-shift-p", ToggleStats, Some("Review")),

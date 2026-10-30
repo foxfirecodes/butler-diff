@@ -1,6 +1,93 @@
 use super::*;
 
 impl ReviewApp {
+    pub(super) fn current_visit(&self, cx: &App) -> Option<navigation::Visit> {
+        let selection = self.loaded_selection.clone()?;
+        let file = self
+            .diff
+            .read(cx)
+            .sticky_file_header()
+            .map(|(file, _)| file.path().to_string())
+            .or_else(|| self.focused_file.clone())
+            .or_else(|| {
+                self.files
+                    .iter()
+                    .find(|file| !self.file_hidden(file))
+                    .map(|file| file.path().to_string())
+            })?;
+        Some(navigation::Visit { selection, file })
+    }
+
+    pub(super) fn reveal_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        if !self.files.iter().any(|file| file.path().as_str() == path) {
+            return;
+        }
+        let group = file_groups::group_key(path, &self.groups);
+        let group_changed = self.collapsed_groups.remove(&group);
+        self.collapsed_files.remove(path);
+        if group_changed {
+            self.sync_diff_files(cx);
+        } else {
+            self.sync_collapsed_files(cx);
+        }
+        self.focused_file = Some(path.to_owned());
+        self.diff
+            .update(cx, |diff, cx| diff.scroll_to_file(path, cx));
+        cx.notify();
+    }
+
+    pub(super) fn visit_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        if let Some(visit) = self.current_visit(cx) {
+            self.history.record(visit);
+        }
+        self.reveal_file(path, cx);
+        if let Some(selection) = self.selection.clone() {
+            self.history.record(navigation::Visit {
+                selection,
+                file: path.to_owned(),
+            });
+        }
+    }
+
+    pub(super) fn navigate_history(&mut self, forward: bool, cx: &mut Context<Self>) {
+        while let Some(visit) = self.history.step(forward) {
+            let valid = self.repo.as_ref().is_some_and(|repo| {
+                repo.stacks.iter().any(|stack| {
+                    stack.id == visit.selection.stack
+                        && stack
+                            .branches
+                            .iter()
+                            .any(|b| b.name == visit.selection.anchor)
+                        && stack.branches.iter().any(|b| b.name == visit.selection.end)
+                })
+            });
+            if !valid {
+                continue;
+            }
+            if self.selection.as_ref() == Some(&visit.selection) && self.loaded.is_some() {
+                if !self
+                    .files
+                    .iter()
+                    .any(|file| file.path().as_str() == visit.file)
+                {
+                    continue;
+                }
+                self.reveal_file(&visit.file, cx);
+            } else {
+                self.remember_comparison(cx);
+                self.selection = Some(visit.selection.clone());
+                self.pending_navigation = Some(visit.clone());
+                self.load_diff(cx);
+                if self.loaded.is_some() {
+                    self.pending_navigation = None;
+                    self.reveal_file(&visit.file, cx);
+                }
+            }
+            cx.notify();
+            break;
+        }
+    }
+
     fn repo_ui_key(&self) -> String {
         self.path.to_string_lossy().into_owned()
     }
