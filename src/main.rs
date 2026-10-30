@@ -1486,6 +1486,19 @@ impl ReviewApp {
         let grouped = self.group_config.enabled && !self.groups.is_empty();
         let groups = if grouped { self.groups.as_slice() } else { &[] };
         let buckets = file_groups::buckets(&self.files, &self.query, groups);
+        let all_groups_collapsed = !buckets.is_empty()
+            && buckets
+                .iter()
+                .all(|bucket| self.collapsed_groups.contains(&bucket.key));
+        let matching_files: Vec<_> = self
+            .files
+            .iter()
+            .filter(|file| file_groups::matches_filter(file, &self.query))
+            .collect();
+        let all_files_collapsed = !matching_files.is_empty()
+            && matching_files
+                .iter()
+                .all(|file| self.collapsed_files.contains(file.path().as_str()));
         let mut list = div()
             .id("files")
             .flex_1()
@@ -1596,6 +1609,75 @@ impl ReviewApp {
                     .flex_col()
                     .gap_2()
                     .child(Input::new(&self.filter).small())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .when(grouped, |row| {
+                                row.child(
+                                    Button::new("toggle-all-groups")
+                                        .ghost()
+                                        .xsmall()
+                                        .label(if all_groups_collapsed {
+                                            "Expand groups"
+                                        } else {
+                                            "Collapse groups"
+                                        })
+                                        .accessibility_label(if all_groups_collapsed {
+                                            "Expand all matching groups"
+                                        } else {
+                                            "Collapse all matching groups"
+                                        })
+                                        .disabled(buckets.is_empty())
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            for bucket in file_groups::buckets(
+                                                &view.files,
+                                                &view.query,
+                                                &view.groups,
+                                            ) {
+                                                if all_groups_collapsed {
+                                                    view.collapsed_groups.remove(&bucket.key);
+                                                } else {
+                                                    view.collapsed_groups.insert(bucket.key);
+                                                }
+                                            }
+                                            view.sync_diff_files(cx);
+                                            cx.notify();
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new("toggle-all-files")
+                                    .ghost()
+                                    .xsmall()
+                                    .label(if all_files_collapsed {
+                                        "Expand files"
+                                    } else {
+                                        "Collapse files"
+                                    })
+                                    .accessibility_label(if all_files_collapsed {
+                                        "Expand all matching file diffs"
+                                    } else {
+                                        "Collapse all matching file diffs"
+                                    })
+                                    .disabled(matching_files.is_empty())
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        for file in view.files.iter().filter(|file| {
+                                            file_groups::matches_filter(file, &view.query)
+                                        }) {
+                                            if all_files_collapsed {
+                                                view.collapsed_files.remove(file.path().as_str());
+                                            } else {
+                                                view.collapsed_files
+                                                    .insert(file.path().to_string());
+                                            }
+                                        }
+                                        view.sync_collapsed_files(cx);
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
                     .child(
                         div()
                             .flex()

@@ -4,7 +4,7 @@ A native code review app for [GitButler](https://gitbutler.com/) stacks, built w
 
 - Review individual branches, entire stacks, or branch ranges.
 - Syntax-highlighted split/unified diffs with automatic refresh.
-- Regex file groups, filters, and per-group file/LOC counts.
+- Regex file groups, filters, per-group file/LOC counts, and collapse/expand-all controls.
 - Persistent viewed files that reset when their diff changes.
 - Remembers your repo, branch range, collapsed files/groups, view options, pane widths, and last file.
 - Inline comments, replies, edit/delete/undo, and live agent collaboration over MCP.
