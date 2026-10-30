@@ -1,5 +1,6 @@
 mod comments;
 mod file_groups;
+mod jump;
 mod mcp;
 mod navigation;
 mod repository;
@@ -52,6 +53,7 @@ actions!(
         SubmitComment,
         NavigateBack,
         NavigateForward,
+        OpenJump,
         Quit
     ]
 );
@@ -1914,6 +1916,7 @@ impl Render for ReviewApp {
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(|view, _: &Refresh, _, cx| view.refresh(cx)))
+            .on_action(cx.listener(|view, _: &OpenJump, window, cx| view.open_jump(window, cx)))
             .on_action(cx.listener(|view, _: &NavigateBack, _, cx| view.navigate_history(false, cx)))
             .on_action(cx.listener(|view, _: &NavigateForward, _, cx| view.navigate_history(true, cx)))
             .on_action(cx.listener(|view, _: &OpenRepository, _, cx| view.open(cx)))
@@ -1953,6 +1956,9 @@ impl Render for ReviewApp {
                             })),
                     )
                     .child(div().font_weight(FontWeight::BOLD).child("butler diff"))
+                    .child(Button::new("jump").small().label("Jump… ⌘K")
+                        .accessibility_label("Jump to file, branch, or stack")
+                        .on_click(cx.listener(|view, _, window, cx| view.open_jump(window, cx))))
                     .child(
                         div()
                             .flex_1()
@@ -2207,6 +2213,7 @@ fn main() -> anyhow::Result<()> {
         Theme::change(ThemeMode::Dark, None, cx);
         cx.bind_keys([
             KeyBinding::new("cmd-r", Refresh, Some("Review")),
+            KeyBinding::new("cmd-k", OpenJump, Some("Review")),
             KeyBinding::new("alt-left", NavigateBack, Some("Review")),
             KeyBinding::new("alt-right", NavigateForward, Some("Review")),
             KeyBinding::new("alt-[", NavigateBack, Some("Review")),

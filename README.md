@@ -21,7 +21,7 @@ On macOS, `sh scripts/bundle-macos.sh` builds `target/debug/Butler Diff.app`.
 
 Click a branch, click a stack’s **view all**, or **shift-click** another branch to select a range. Use **Groups…** to organize files. **⌘Enter** submits comments; **Escape** closes the composer and keeps a draft for this session.
 
-Use **⌥← / ⌥→** or **⌥[ / ⌥]** to go back/forward through visited files.
+Use **⌘K** to jump to a file, branch, or stack. **⌥← / ⌥→** or **⌥[ / ⌥]** goes back/forward through visited files.
 
 ## MCP
 
