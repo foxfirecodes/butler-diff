@@ -1,0 +1,50 @@
+[tasks.build]
+description = "Build debug binary"
+run = "cargo build --locked"
+
+[tasks.release]
+description = "Build optimized, stripped release binary"
+run = "cargo build --locked --release"
+
+[tasks.run]
+description = "Run the debug binary (optional repository argument)"
+run = "cargo run --locked --"
+
+[tasks.icon]
+description = "Regenerate the macOS icon from assets/icon.svg"
+run = "sh scripts/generate-icon.sh"
+
+[tasks.app]
+description = "Build and package the release app"
+run = "sh scripts/bundle-macos.sh release"
+
+[tasks.app-debug]
+description = "Build and package the original debug app"
+run = "sh scripts/bundle-macos.sh debug"
+
+[tasks.sign]
+description = "Build and ad-hoc sign the release app"
+depends = ["app"]
+run = "codesign --force --deep --sign - 'target/release/Butler Diff.app'"
+
+[tasks.install]
+description = "Build, sign, and install in /Applications"
+depends = ["sign"]
+run = "sh scripts/install-macos.sh"
+
+[tasks.app-run]
+description = "Build, sign, and open the release app"
+depends = ["sign"]
+run = "open 'target/release/Butler Diff.app' --args"
+
+[tasks.verify-signature]
+description = "Verify the release app signature"
+run = "codesign --verify --deep --strict --verbose=2 'target/release/Butler Diff.app'"
+
+[tasks.check]
+description = "Check formatting and lint all Rust targets"
+run = ["cargo fmt --check", "cargo clippy --locked --all-targets -- -D warnings"]
+
+[tasks.test]
+description = "Run the test suite"
+run = "cargo test --locked"

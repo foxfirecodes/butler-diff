@@ -17,7 +17,7 @@ Requires Rust and Git.
 cargo run -- /path/to/repository
 ```
 
-On macOS, `sh scripts/bundle-macos.sh` builds `target/debug/Butler Diff.app`.
+On macOS: `mise run build` builds debug, `mise run app` packages release, and `mise run install` builds/signs/copies it to `/Applications/Butler Diff.app`. `mise run icon` regenerates the icon from the SVG.
 
 Click a branch, click a stack’s **view all**, or **shift-click** another branch to select a range. Use **Groups…** to organize files. **⌘Enter** submits comments; **Escape** closes the composer and keeps a draft for this session.
 

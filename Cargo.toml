@@ -19,6 +19,9 @@ toml = "0.9"
 [profile.dev]
 debug = 0
 
+[profile.release]
+strip = "symbols"
+
 # Keep edit/build cycles quick while compiling the rendering hot paths properly.
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
