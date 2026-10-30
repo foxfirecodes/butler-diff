@@ -28,6 +28,7 @@ use gpui_kit::component::{
     },
     resizable::{HandleEdge, ResizablePanelEvent, ResizableState, resize_handle},
     resizable_panel,
+    text::TextView,
     tooltip::Tooltip,
 };
 use gpui_kit::prelude::FluentBuilder;

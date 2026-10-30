@@ -586,9 +586,26 @@ impl ReviewApp {
                             .whitespace_normal()
                             .text_sm()
                             .child(if deleted {
-                                "Message deleted".into()
+                                div()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Message deleted")
+                                    .into_any_element()
                             } else {
-                                message.body.clone()
+                                TextView::markdown(
+                                    SharedString::from(format!("message-body:{}", message.id)),
+                                    message.body.clone(),
+                                )
+                                .w_full()
+                                .min_w_0()
+                                .on_link_click(|url, _, _, cx| {
+                                    if url.starts_with("https://")
+                                        || url.starts_with("http://")
+                                        || url.starts_with("mailto:")
+                                    {
+                                        cx.open_url(url);
+                                    }
+                                })
+                                .into_any_element()
                             }),
                     )
             }))

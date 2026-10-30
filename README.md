@@ -7,7 +7,7 @@ A native code review app for [GitButler](https://gitbutler.com/) stacks, built w
 - Regex file groups, filters, per-group file/LOC counts, and collapse/expand-all controls.
 - Persistent viewed files that reset when their diff changes.
 - Remembers your repo, branch range, collapsed files/groups, view options, pane widths, and last file.
-- Inline comments, replies, edit/delete/undo, and live agent collaboration over MCP.
+- Markdown comments, replies, edit/delete/undo, and live agent collaboration over MCP.
 
 ## Run
 
