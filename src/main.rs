@@ -3,10 +3,12 @@ mod file_groups;
 mod mcp;
 mod repository;
 mod review_ui;
+mod session;
 #[cfg(test)]
 mod tests;
 mod viewed;
 mod watch;
+mod workspace_ui;
 
 use file_groups::{CompiledGroup, FileTotals, GroupConfig, GroupDefinition};
 use gpui_kit::component::{
@@ -22,13 +24,14 @@ use gpui_kit::component::{
         Enter as InputEnter, Escape as InputEscape, Input, InputEvent, InputState, Textarea,
         TextareaState,
     },
-    resizable::{HandleEdge, resize_handle},
+    resizable::{HandleEdge, ResizablePanelEvent, ResizableState, resize_handle},
     resizable_panel,
     tooltip::Tooltip,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use repository::Repository;
+use session::Selection;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -43,13 +46,6 @@ actions!(
     butler_diff,
     [Refresh, OpenRepository, ToggleStats, SubmitComment, Quit]
 );
-
-#[derive(Clone)]
-struct Selection {
-    stack: String,
-    anchor: String,
-    end: String,
-}
 
 struct GroupDraft {
     name: Entity<InputState>,
@@ -198,6 +194,14 @@ fn sticky_layer(
 }
 
 struct ReviewApp {
+    session: session::Session,
+    session_store: Option<session::Store>,
+    session_task: Option<Task<()>>,
+    focused_file: Option<String>,
+    loaded_selection: Option<Selection>,
+    panels: Entity<ResizableState>,
+    file_panel_width: f32,
+    comment_panel_width: f32,
     path: PathBuf,
     base_override: Option<String>,
     repo: Option<Repository>,
@@ -255,7 +259,31 @@ impl ReviewApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let state_path = session::state_path();
+        let (session, session_store) = match state_path {
+            Some(path) => match session::Session::load(&path) {
+                Ok(session) => (session, Some(session::Store::new(path))),
+                Err(error) => {
+                    eprintln!("UI state unavailable: {error:#}");
+                    (session::Session::default(), None)
+                }
+            },
+            None => (session::Session::default(), None),
+        };
         let diff = cx.new(|cx| DiffState::new([], cx));
+        let panels = cx.new(|_| ResizableState::default());
+        let panel_sub = cx.subscribe(&panels, |view, panels, _: &ResizablePanelEvent, cx| {
+            let sizes = panels.read(cx).sizes();
+            if let Some(width) = sizes.first() {
+                view.file_panel_width = (*width).into();
+            }
+            if view.show_comments
+                && let Some(width) = sizes.get(2)
+            {
+                view.comment_panel_width = (*width).into();
+            }
+            cx.notify();
+        });
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter changed files…"));
         let sub = cx.subscribe(&filter, |this, input, event, cx| {
             if matches!(event, InputEvent::Change) {
@@ -278,6 +306,14 @@ impl ReviewApp {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut view = Self {
+            session,
+            session_store,
+            session_task: None,
+            focused_file: None,
+            loaded_selection: None,
+            panels,
+            file_panel_width: 340.,
+            comment_panel_width: 360.,
             path,
             base_override,
             repo: None,
@@ -324,9 +360,17 @@ impl ReviewApp {
             repo_task: None,
             diff_task: None,
             watch_task: None,
-            _subscriptions: vec![sub, collapse_sub],
+            _subscriptions: vec![sub, collapse_sub, panel_sub],
             focus,
         };
+        view.restore_repo_ui(window, cx);
+        let observer = cx.observe(&cx.entity(), |view, _, cx| view.schedule_session_save(cx));
+        let on_quit = cx.on_app_quit(|view, cx| {
+            view.save_session_now(cx);
+            async {}
+        });
+        let on_release = cx.on_release(|view, cx| view.save_session_now(cx));
+        view._subscriptions.extend([observer, on_quit, on_release]);
         view.refresh(cx);
         view
     }
@@ -697,9 +741,14 @@ impl ReviewApp {
         };
         let repo = self.repo.as_ref().unwrap().clone();
         let key = (repo.root.clone(), base.clone(), tip.clone());
-        if self.loaded.as_ref() == Some(&key) || self.pending_diff.as_ref() == Some(&key) {
+        if self.loaded.as_ref() == Some(&key) {
+            self.loaded_selection = self.selection.clone();
             return;
         }
+        if self.pending_diff.as_ref() == Some(&key) {
+            return;
+        }
+        self.remember_comparison(cx);
         self.loaded = None;
         self.pending_diff = Some(key.clone());
         self.loading_diff = true;
@@ -724,6 +773,7 @@ impl ReviewApp {
                 match result {
                     Ok((files, viewed)) => {
                         view.loaded = Some(key);
+                        view.loaded_selection = view.selection.clone();
                         view.files = files;
                         view.sync_comment_anchors();
                         match viewed {
@@ -734,7 +784,17 @@ impl ReviewApp {
                             }
                         }
                         view.collapsed_files = (*view.viewed_files).clone();
+                        let saved = view.saved_comparison().cloned();
+                        if let Some(saved) = &saved {
+                            view.collapsed_files = saved.collapsed_for(
+                                view.files.iter().map(|file| file.path().as_str()),
+                                &view.viewed_files,
+                            );
+                        }
                         view.sync_diff_files(cx);
+                        if let Some(saved) = saved {
+                            view.restore_comparison_position(saved, cx);
+                        }
                         // Reconcile a mark completed while this diff was loading.
                         if view.viewed_epoch != viewed_epoch {
                             view.reload_viewed(cx);
@@ -749,6 +809,7 @@ impl ReviewApp {
     }
 
     fn select(&mut self, stack: String, name: String, extend: bool, cx: &mut Context<Self>) {
+        self.remember_comparison(cx);
         let anchor = self
             .selection
             .as_ref()
@@ -774,7 +835,8 @@ impl ReviewApp {
         cx.spawn(async move |this, cx| match picker.await {
             Ok(Ok(Some(paths))) => {
                 if let Some(path) = paths.into_iter().next() {
-                    let _ = this.update(cx, |view, cx| {
+                    let _ = this.update_in(cx, |view, window, cx| {
+                        view.snapshot_session(cx);
                         view.stash_comment_draft(cx);
                         view.path = path;
                         view.base_override = None;
@@ -802,6 +864,24 @@ impl ReviewApp {
                         view.loading_diff = false;
                         view.files.clear();
                         view.clear_viewed();
+                        view.restore_repo_ui(window, cx);
+                        view.panels = cx.new(|_| ResizableState::default());
+                        let panel_sub = cx.subscribe(
+                            &view.panels,
+                            |view, panels, _: &ResizablePanelEvent, cx| {
+                                let sizes = panels.read(cx).sizes();
+                                if let Some(width) = sizes.first() {
+                                    view.file_panel_width = (*width).into();
+                                }
+                                if view.show_comments
+                                    && let Some(width) = sizes.get(2)
+                                {
+                                    view.comment_panel_width = (*width).into();
+                                }
+                                cx.notify();
+                            },
+                        );
+                        view._subscriptions.push(panel_sub);
                         view.diff.update(cx, |state, cx| state.set_files([], cx));
                         view.refresh(cx);
                     });
@@ -866,6 +946,7 @@ impl ReviewApp {
                                 }
                             ))
                             .on_click(cx.listener(move |view, _, _, cx| {
+                                view.remember_comparison(cx);
                                 view.selection = Some(Selection {
                                     stack: full_id.clone(),
                                     anchor: first.clone(),
@@ -1204,8 +1285,10 @@ impl ReviewApp {
                     .child(button),
             )
             .on_click(cx.listener(move |view, _, _, cx| {
+                view.focused_file = Some(path.clone());
                 view.diff
                     .update(cx, |state, cx| state.scroll_to_file(&path, cx));
+                cx.notify();
             }))
     }
 
@@ -1900,9 +1983,10 @@ impl Render for ReviewApp {
                             .child(
                                 div().flex_1().min_h_0().child(
                                     h_resizable("file-diff-panels")
+                                        .with_state(&self.panels)
                                         .child(
                                             resizable_panel()
-                                                .size(px(340.))
+                                                .size(px(self.file_panel_width))
                                                 .fixed()
                                                 .size_range(px(220.)..px(750.))
                                                 .child(self.file_sidebar(cx)),
@@ -1913,7 +1997,7 @@ impl Render for ReviewApp {
                                                 .child(body),
                                         )
                                         .when(self.show_comments, |panels| {
-                                            panels.child(resizable_panel().size(px(360.)).fixed().size_range(px(260.)..px(650.)).child(self.comments_panel(cx)))
+                                            panels.child(resizable_panel().size(px(self.comment_panel_width)).fixed().size_range(px(260.)..px(650.)).child(self.comments_panel(cx)))
                                         }),
                                 ),
                             ),
@@ -1983,7 +2067,15 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    let path = path.unwrap_or(std::env::current_dir()?);
+    let path = path
+        .or_else(|| {
+            if inspect || serve_mcp {
+                return None;
+            }
+            session::state_path().and_then(|path| session::Session::load(&path).ok()?.last_repo)
+        })
+        .unwrap_or(std::env::current_dir()?);
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
     if inspect && serve_mcp {
         anyhow::bail!("Choose either --inspect or --mcp");
     }
