@@ -2,7 +2,7 @@
 name = "butler-diff"
 version = "0.1.0"
 edition = "2024"
-description = "A fast, read-only GitButler stack review tool"
+description = "A fast, read-only Git branch and GitButler stack review tool"
 
 [dependencies]
 anyhow = "1"

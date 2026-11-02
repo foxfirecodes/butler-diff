@@ -328,7 +328,7 @@ impl ReviewApp {
             file_panel_width: 340.,
             comment_panel_width: 360.,
             path,
-            base_override,
+            base_override: None,
             repo: None,
             selection: None,
             diff,
@@ -379,6 +379,7 @@ impl ReviewApp {
             focus,
         };
         view.restore_repo_ui(window, cx);
+        view.base_override = base_override.or(view.base_override);
         let observer = cx.observe(&cx.entity(), |view, _, cx| view.schedule_session_save(cx));
         let on_quit = cx.on_app_quit(|view, cx| {
             view.save_session_now(cx);
@@ -637,6 +638,7 @@ impl ReviewApp {
                 .background_spawn(async move {
                     if changes.is_some_and(Changes::metadata_only)
                         && let Some(previous) = &previous
+                        && !previous.is_local()
                         && previous.current_metadata_signature()? == previous.metadata_signature
                     {
                         return Ok(None);
@@ -716,16 +718,22 @@ impl ReviewApp {
         }
     }
 
-    fn endpoints(&self) -> Option<(String, String, String)> {
-        let sel = self.selection.as_ref()?;
-        let stack = self
-            .repo
-            .as_ref()?
-            .stacks
-            .iter()
-            .find(|s| s.id == sel.stack)?;
-        let a = stack.branches.iter().position(|b| b.name == sel.anchor)?;
-        let b = stack.branches.iter().position(|b| b.name == sel.end)?;
+    fn endpoints(&self) -> anyhow::Result<Option<(String, String, String)>> {
+        let Some((stack, a, b)) = self.selection.as_ref().and_then(|sel| {
+            let stack = self
+                .repo
+                .as_ref()?
+                .stacks
+                .iter()
+                .find(|s| s.id == sel.stack)?;
+            Some((
+                stack,
+                stack.branches.iter().position(|b| b.name == sel.anchor)?,
+                stack.branches.iter().position(|b| b.name == sel.end)?,
+            ))
+        }) else {
+            return Ok(None);
+        };
         let (lo, hi) = (a.min(b), a.max(b));
         let label = if lo == hi {
             stack.branches[lo].name.clone()
@@ -737,15 +745,17 @@ impl ReviewApp {
                 hi - lo + 1
             )
         };
-        Some((
-            stack.branches[lo].base.clone(),
+        Ok(Some((
+            stack.branches[lo].base()?.to_owned(),
             stack.branches[hi].tip.clone(),
             label,
-        ))
+        )))
     }
 
     fn load_diff(&mut self, cx: &mut Context<Self>) {
-        let Some((base, tip, _)) = self.endpoints() else {
+        let endpoints = self.endpoints();
+        let endpoint_error = endpoints.as_ref().err().map(|error| format!("{error:#}"));
+        let Some((base, tip, _)) = endpoints.ok().flatten() else {
             self.diff_task = None;
             self.loading_diff = false;
             self.loaded = None;
@@ -753,6 +763,7 @@ impl ReviewApp {
             self.files.clear();
             self.clear_viewed();
             self.diff.update(cx, |state, cx| state.set_files([], cx));
+            self.error = endpoint_error;
             return;
         };
         let repo = self.repo.as_ref().unwrap().clone();
@@ -851,7 +862,7 @@ impl ReviewApp {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Open GitButler repository".into()),
+            prompt: Some("Open Git repository".into()),
         });
         cx.spawn(async move |this, cx| match picker.await {
             Ok(Ok(Some(paths))) => {
@@ -967,6 +978,7 @@ impl ReviewApp {
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let local = self.repo.as_ref().is_some_and(Repository::is_local);
         let mut sidebar = div()
             .id("stacks")
             .w_full()
@@ -986,7 +998,11 @@ impl ReviewApp {
                     .py_1()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("STACKS · BASE → TIP"),
+                    .child(if local {
+                        "LOCAL BRANCHES"
+                    } else {
+                        "STACKS · BASE → TIP"
+                    }),
             );
         if let Some(repo) = &self.repo {
             for (si, stack) in repo.stacks.iter().enumerate() {
@@ -994,36 +1010,38 @@ impl ReviewApp {
                 let first = stack.branches.first().unwrap().name.clone();
                 let last = stack.branches.last().unwrap().name.clone();
                 let full_id = id.clone();
-                let mut card = div()
-                    .flex()
-                    .flex_col()
-                    .flex_shrink_0()
-                    .gap_1()
-                    .pb_3()
-                    .child(
-                        Button::new(("stack", si))
-                            .ghost()
-                            .small()
-                            .label(format!(
-                                "stack {} · {} · view all",
-                                si + 1,
-                                if stack.applied {
-                                    "applied"
-                                } else {
-                                    "unapplied"
-                                }
-                            ))
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.remember_comparison(cx);
-                                view.selection = Some(Selection {
-                                    stack: full_id.clone(),
-                                    anchor: first.clone(),
-                                    end: last.clone(),
-                                });
-                                view.load_diff(cx);
-                                cx.notify();
-                            })),
-                    );
+                let mut card =
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_shrink_0()
+                        .gap_1()
+                        .when(!local, |card| {
+                            card.pb_3().child(
+                                Button::new(("stack", si))
+                                    .ghost()
+                                    .small()
+                                    .label(format!(
+                                        "stack {} · {} · view all",
+                                        si + 1,
+                                        if stack.applied {
+                                            "applied"
+                                        } else {
+                                            "unapplied"
+                                        }
+                                    ))
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.remember_comparison(cx);
+                                        view.selection = Some(Selection {
+                                            stack: full_id.clone(),
+                                            anchor: first.clone(),
+                                            end: last.clone(),
+                                        });
+                                        view.load_diff(cx);
+                                        cx.notify();
+                                    })),
+                            )
+                        });
                 let range = self
                     .selection
                     .as_ref()
@@ -1810,10 +1828,15 @@ impl ReviewApp {
 
 impl Render for ReviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let endpoints = self.endpoints();
+        let endpoints = self.endpoints().ok().flatten();
         let title = endpoints
             .as_ref()
             .map(|(_, _, label)| label.clone())
+            .or_else(|| {
+                self.selection
+                    .as_ref()
+                    .map(|selection| selection.end.clone())
+            })
             .unwrap_or_else(|| "Select a branch".into());
         let subtitle = endpoints
             .as_ref()
@@ -1854,11 +1877,15 @@ impl Render for ReviewApp {
         } else if self.files.is_empty() {
             body = body.child(div().p_6().text_color(cx.theme().muted_foreground).child(
                 if self.repo.as_ref().is_some_and(|r| r.stacks.is_empty()) {
-                    "No GitButler stacks found in this repository."
+                    if self.repo.as_ref().is_some_and(Repository::is_local) {
+                        "No local branches with commits yet. Create a commit to start reviewing."
+                    } else {
+                        "No GitButler stacks found in this repository."
+                    }
                 } else if self.selection.is_some() {
                     "No changes in this comparison."
                 } else {
-                    "Open a GitButler repository to start reviewing."
+                    "Open a Git repository to start reviewing."
                 },
             ));
         } else if self.files.iter().all(|file| self.file_hidden(file)) {
@@ -1947,9 +1974,13 @@ impl Render for ReviewApp {
         });
         let status = self.watch_error.clone().unwrap_or_else(|| {
             if self.watcher.is_some() {
-                "watching git metadata · shift-click branches to review a range".into()
+                if self.repo.as_ref().is_some_and(Repository::is_local) {
+                    "watching git metadata · branch changes since the merge-base".into()
+                } else {
+                    "watching git metadata · shift-click branches to review a range".into()
+                }
             } else {
-                "read-only · open a GitButler repository to start".into()
+                "read-only · open a Git repository to start".into()
             }
         });
         div()
@@ -2014,6 +2045,19 @@ impl Render for ReviewApp {
                             .text_ellipsis()
                             .text_color(cx.theme().muted_foreground)
                             .child(self.path.display().to_string()),
+                    )
+                    .child(
+                        Button::new("base-branch")
+                            .small()
+                            .child(div().max_w(px(180.)).overflow_hidden().text_ellipsis().child(format!("Base: {}…", self.repo.as_ref()
+                                .map(|repo| repo.target_ref.as_str())
+                                .or(self.base_override.as_deref())
+                                .filter(|name| !name.is_empty())
+                                .map(repository::short_ref)
+                                .unwrap_or("auto"))))
+                            .accessibility_label("Choose base branch")
+                            .disabled(self.loading_repo)
+                            .on_click(cx.listener(|view, _, window, cx| view.open_base_picker(window, cx))),
                     )
                     .child(
                         Button::new("open")
@@ -2220,7 +2264,7 @@ fn main() -> anyhow::Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "butler-diff [REPOSITORY] [--base REF] [--background | --inspect | --mcp [--author NAME]]\n\nNative GitButler stack reviews.\nClick a branch; shift-click another for a range; click a stack header for the whole stack.\n--background opens a window without activating the app.\n--inspect prints repository/stack endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
+                    "butler-diff [REPOSITORY] [--base REF] [--background | --inspect | --mcp [--author NAME]]\n\nNative Git branch and GitButler stack reviews.\nClick a branch; in GitButler repos, shift-click another for a range or click a stack header for the whole stack.\n--base selects the comparison base; the GUI also has a base-branch picker.\n--background opens a window without activating the app.\n--inspect prints repository/branch endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
                 );
                 return Ok(());
             }

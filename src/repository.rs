@@ -14,6 +14,7 @@ pub struct Repository {
     pub git_dir: PathBuf,
     pub common_dir: PathBuf,
     pub target: String,
+    pub target_ref: String,
     pub source: String,
     pub stacks: Vec<Stack>,
     #[serde(skip)]
@@ -30,9 +31,26 @@ pub struct Stack {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Branch {
     pub name: String,
-    pub base: String,
+    #[serde(flatten)]
+    pub comparison: BranchComparison,
     pub tip: String,
     pub review: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum BranchComparison {
+    Ready { base: String },
+    Unavailable { error: String },
+}
+
+impl Branch {
+    pub fn base(&self) -> Result<&str> {
+        match &self.comparison {
+            BranchComparison::Ready { base } => Ok(base),
+            BranchComparison::Unavailable { error } => bail!("{error}"),
+        }
+    }
 }
 
 #[derive(Default, Deserialize, Hash)]
@@ -103,6 +121,13 @@ fn config(root: &Path, key: &str) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
+}
+
+pub fn short_ref(reference: &str) -> &str {
+    reference
+        .strip_prefix("refs/heads/")
+        .or_else(|| reference.strip_prefix("refs/remotes/"))
+        .unwrap_or(reference)
 }
 
 fn resolve(root: &Path, revision: &str) -> Result<String> {
@@ -183,6 +208,28 @@ fn read_sqlite(path: &Path) -> Result<Metadata> {
 }
 
 impl Repository {
+    pub fn is_local(&self) -> bool {
+        self.source == "Git local branches"
+    }
+
+    pub fn base_refs(path: &Path) -> Result<Vec<String>> {
+        Ok(git(
+            path,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(symref)",
+                "refs/heads",
+                "refs/remotes",
+            ],
+        )?
+        .lines()
+        .filter_map(|line| {
+            let (name, symbolic_target) = line.split_once('\0')?;
+            symbolic_target.is_empty().then(|| name.to_owned())
+        })
+        .collect())
+    }
+
     // GitButler writes caches/analytics into the same database. A DB file event
     // alone is not evidence that any stack changed. Probe only stack tables.
     pub fn current_metadata_signature(&self) -> Result<u64> {
@@ -209,15 +256,16 @@ impl Repository {
         let migrated = config(&root, "gitbutler.project.portedmeta").as_deref() == Some("true");
         let (meta, source) = if migrated {
             (read_sqlite(&dir.join("but.sqlite"))?, "GitButler SQLite")
-        } else {
-            let text = std::fs::read_to_string(dir.join("virtual_branches.toml")).context(
-                "No GitButler stack metadata found. Open a repository managed by GitButler.",
-            )?;
+        } else if dir.join("virtual_branches.toml").exists() {
+            let text = std::fs::read_to_string(dir.join("virtual_branches.toml"))
+                .context("Couldn't read GitButler stack metadata")?;
             (
                 toml::from_str::<Metadata>(&text)
                     .context("Couldn't parse GitButler stack metadata")?,
                 "GitButler TOML",
             )
+        } else {
+            return Self::load_local(root, git_dir, common_dir, target_override);
         };
         let metadata_signature = signature(&meta);
         let target = target_override
@@ -228,7 +276,8 @@ impl Repository {
             .context(
                 "GitButler has no target branch. Pass --base <ref> (e.g. --base origin/main).",
             )?;
-        let target = resolve(&root, &target)
+        let target_ref = target;
+        let target = resolve(&root, &target_ref)
             .context("Couldn't resolve the stack base. Pass --base <ref>.")?;
         let mut raw: Vec<_> = meta.branches.into_iter().collect();
         raw.sort_by(|(a_id, a), (b_id, b)| {
@@ -264,7 +313,7 @@ impl Repository {
                 previous = Some(tip.clone());
                 branches.push(Branch {
                     name: head.name,
-                    base,
+                    comparison: BranchComparison::Ready { base },
                     tip,
                     review: head
                         .review_id
@@ -282,9 +331,96 @@ impl Repository {
             git_dir,
             common_dir,
             target,
+            target_ref,
             source: source.into(),
             stacks,
             metadata_signature,
+        })
+    }
+
+    fn load_local(
+        root: PathBuf,
+        git_dir: PathBuf,
+        common_dir: PathBuf,
+        target_override: Option<&str>,
+    ) -> Result<Self> {
+        let current = git(&root, &["symbolic-ref", "--quiet", "HEAD"])
+            .ok()
+            .map(|name| name.trim().to_owned());
+        let refs = git(
+            &root,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)",
+                "refs/heads",
+            ],
+        )?;
+        let mut branches: Vec<_> = refs
+            .lines()
+            .filter_map(|line| line.split_once('\0'))
+            .collect();
+        branches.sort_by_key(|(name, _)| (Some(*name) != current.as_deref(), *name));
+        let remote_head = git(
+            &root,
+            &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+        )
+        .ok()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| resolve(&root, name).is_ok());
+        let target_ref = target_override
+            .map(str::to_owned)
+            .or(remote_head)
+            .or_else(|| {
+                ["refs/heads/main", "refs/heads/master"]
+                    .into_iter()
+                    .find(|candidate| branches.iter().any(|(name, _)| name == candidate))
+                    .map(str::to_owned)
+            })
+            .or_else(|| branches.first().map(|(name, _)| (*name).to_owned()))
+            .unwrap_or_default();
+        let target = if target_ref.is_empty() {
+            String::new() // A new repository has no committed branches to compare yet.
+        } else {
+            resolve(&root, &target_ref).with_context(|| {
+                format!(
+                    "Couldn't resolve base {target_ref}. Choose a base branch or pass --base <ref>."
+                )
+            })?
+        };
+        let mut stacks = Vec::with_capacity(branches.len());
+        for (reference, tip) in branches {
+            let name = reference.strip_prefix("refs/heads/").unwrap().to_owned();
+            let comparison = match git(&root, &["merge-base", &target, tip]) {
+                Ok(base) => BranchComparison::Ready {
+                    base: base.trim().to_owned(),
+                },
+                Err(error) => BranchComparison::Unavailable {
+                    error: format!(
+                        "Couldn't compare {name} with {target_ref}. Choose a base branch with shared history. {error:#}"
+                    ),
+                },
+            };
+            // Local branches are independent comparisons, never a synthetic ordered stack.
+            stacks.push(Stack {
+                id: reference.to_owned(),
+                applied: false,
+                branches: vec![Branch {
+                    name,
+                    comparison,
+                    tip: tip.to_owned(),
+                    review: None,
+                }],
+            });
+        }
+        Ok(Self {
+            root,
+            git_dir,
+            common_dir,
+            target,
+            target_ref,
+            source: "Git local branches".into(),
+            stacks,
+            metadata_signature: 0,
         })
     }
 

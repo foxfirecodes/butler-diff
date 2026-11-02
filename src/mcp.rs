@@ -41,7 +41,7 @@ impl Server {
         };
         add(
             "list_stacks",
-            "Read current GitButler stacks and resolved branch base/tip commit IDs for this repository.",
+            "Read GitButler stacks or independent local branches and their resolved base/tip commit IDs. Branches without shared history with the base return an error instead of a base.",
             json!({}),
             json!([]),
             true,

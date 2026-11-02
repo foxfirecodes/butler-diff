@@ -809,8 +809,14 @@ fn branch_diffs_exclude_lower_branches_and_range_includes_both() {
     let repo = Repository::load(&f.0, None).unwrap();
     let branches = &repo.stacks[0].branches;
     assert_eq!(branches.len(), 2); // archived heads do not become branch boundaries
-    assert_eq!((&branches[0].base, &branches[0].tip), (&base, &lower));
-    assert_eq!((&branches[1].base, &branches[1].tip), (&lower, &upper));
+    assert_eq!(
+        (branches[0].base().unwrap(), &branches[0].tip),
+        (base.as_str(), &lower)
+    );
+    assert_eq!(
+        (branches[1].base().unwrap(), &branches[1].tip),
+        (lower.as_str(), &upper)
+    );
     assert_eq!(paths(&repo, &lower, &upper), vec!["upper.txt"]);
     assert_eq!(
         paths(&repo, &base, &upper),
@@ -826,7 +832,7 @@ fn resolves_live_refs_after_a_commit_and_refreshes_from_nested_directory() {
     std::fs::create_dir(f.0.join("nested")).unwrap();
     let repo = Repository::load(&f.0.join("nested"), None).unwrap();
     assert_eq!(repo.stacks[0].branches[1].tip, tip);
-    assert_eq!(repo.stacks[0].branches[1].base, lower);
+    assert_eq!(repo.stacks[0].branches[1].base().unwrap(), lower);
     let patch = repo.patch(&lower, &tip).unwrap();
     assert!(patch.contains("+new content"));
 }
@@ -950,11 +956,193 @@ fn patch_handles_renames_binary_files_and_deleted_files() {
 }
 
 #[test]
-fn missing_metadata_returns_an_actionable_error() {
+fn ordinary_repository_lists_independent_local_branches_and_uses_merge_bases() {
     let f = Fixture::new();
-    f.commit("a", "a");
-    let err = Repository::load(Path::new(&f.0), None).unwrap_err();
-    assert!(format!("{err:#}").contains("No GitButler stack metadata"));
+    let base = f.commit("base.txt", "base\n");
+    git(&f.0, &["checkout", "-qb", "feature"]).unwrap();
+    let tip = f.commit("feature.txt", "feature\n");
+    git(&f.0, &["checkout", "-q", "main"]).unwrap();
+    f.commit("main-only.txt", "base advanced\n");
+    git(&f.0, &["checkout", "-q", "feature"]).unwrap();
+    git(
+        &f.0,
+        &["update-ref", "refs/remotes/origin/remote-only", &tip],
+    )
+    .unwrap();
+    let repo = Repository::load(&f.0, None).unwrap();
+    assert!(repo.is_local());
+    assert_eq!(repo.target_ref, "refs/heads/main");
+    assert_eq!(repo.stacks.len(), 2);
+    assert!(repo.stacks.iter().all(|stack| stack.branches.len() == 1));
+    let feature = &repo.stacks[0].branches[0];
+    assert_eq!(feature.name, "feature"); // Initially select the checked-out branch.
+    assert_eq!(feature.base().unwrap(), base);
+    assert_eq!(feature.tip, tip);
+    assert_eq!(
+        paths(&repo, feature.base().unwrap(), &feature.tip),
+        vec!["feature.txt"]
+    );
+    let refs = Repository::base_refs(&f.0).unwrap();
+    assert!(refs.contains(&"refs/heads/main".into()));
+    assert!(refs.contains(&"refs/remotes/origin/remote-only".into()));
+    let json = serde_json::to_value(feature).unwrap();
+    assert_eq!(json["base"], base); // Keep the existing MCP endpoint shape.
+    assert!(json.get("error").is_none());
+}
+
+#[test]
+fn local_base_override_changes_comparisons_and_invalid_bases_are_actionable() {
+    let f = Fixture::new();
+    let base = f.commit("base.txt", "base\n");
+    git(&f.0, &["checkout", "-qb", "lower"]).unwrap();
+    let lower = f.commit("lower.txt", "lower\n");
+    git(&f.0, &["checkout", "-qb", "upper"]).unwrap();
+    let upper = f.commit("upper.txt", "upper\n");
+    let auto = Repository::load(&f.0, None).unwrap();
+    assert_eq!(auto.stacks[0].branches[0].base().unwrap(), base);
+    let selected = Repository::load(&f.0, Some("refs/heads/lower")).unwrap();
+    assert_eq!(selected.target, lower);
+    assert_eq!(selected.target_ref, "refs/heads/lower");
+    assert_eq!(selected.stacks[0].branches[0].base().unwrap(), lower);
+    assert_eq!(paths(&selected, &lower, &upper), vec!["upper.txt"]);
+    let error = Repository::load(&f.0, Some("missing")).unwrap_err();
+    assert!(format!("{error:#}").contains("Choose a base branch or pass --base"));
+}
+
+#[test]
+fn automatic_local_base_prefers_remote_default_and_supports_packed_refs() {
+    let f = Fixture::new();
+    let base = f.commit("base.txt", "base\n");
+    git(&f.0, &["checkout", "-qb", "feature"]).unwrap();
+    let tip = f.commit("feature.txt", "feature\n");
+    git(&f.0, &["update-ref", "refs/remotes/origin/trunk", &base]).unwrap();
+    git(
+        &f.0,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        ],
+    )
+    .unwrap();
+    git(&f.0, &["pack-refs", "--all"]).unwrap();
+    let repo = Repository::load(&f.0, None).unwrap();
+    assert_eq!(repo.target_ref, "refs/remotes/origin/trunk");
+    assert_eq!(repo.stacks[0].branches[0].tip, tip);
+    assert!(
+        !Repository::base_refs(&f.0)
+            .unwrap()
+            .contains(&"refs/remotes/origin/HEAD".into())
+    );
+    assert_eq!(
+        Repository::load(&f.0, Some("main")).unwrap().target_ref,
+        "main"
+    );
+}
+
+#[test]
+fn local_repositories_support_unborn_and_detached_heads_and_nonstandard_bases() {
+    let f = Fixture::new();
+    let empty = Repository::load(&f.0, None).unwrap();
+    assert!(empty.is_local());
+    assert!(empty.stacks.is_empty());
+    assert!(empty.target.is_empty());
+    assert!(Repository::base_refs(&f.0).unwrap().is_empty());
+    f.commit("a", "a\n");
+    git(&f.0, &["branch", "-m", "trunk"]).unwrap();
+    assert_eq!(
+        Repository::load(&f.0, None).unwrap().target_ref,
+        "refs/heads/trunk"
+    );
+    git(&f.0, &["checkout", "--detach", "-q"]).unwrap();
+    assert_eq!(
+        Repository::load(&f.0, None).unwrap().target_ref,
+        "refs/heads/trunk"
+    );
+}
+
+#[test]
+fn unrelated_local_branch_does_not_block_other_reviews() {
+    let f = Fixture::new();
+    f.commit("main.txt", "main\n");
+    git(&f.0, &["checkout", "--orphan", "unrelated", "-q"]).unwrap();
+    git(&f.0, &["rm", "-q", "-rf", "."]).unwrap();
+    f.commit("other.txt", "other\n");
+    let repo = Repository::load(&f.0, None).unwrap();
+    let unrelated = &repo.stacks[0].branches[0];
+    assert_eq!(unrelated.name, "unrelated");
+    assert!(
+        unrelated
+            .base()
+            .unwrap_err()
+            .to_string()
+            .contains("shared history")
+    );
+    assert!(repo.stacks[1].branches[0].base().is_ok());
+    let json = serde_json::to_value(unrelated).unwrap();
+    assert!(json.get("base").is_none());
+    assert!(json["error"].as_str().unwrap().contains("shared history"));
+    assert!(
+        Repository::load(&f.0, Some("unrelated")).unwrap().stacks[0].branches[0]
+            .base()
+            .is_ok()
+    );
+}
+
+#[test]
+fn invalid_gitbutler_metadata_does_not_silently_fall_back_to_local_branches() {
+    let (f, _, _, _) = Fixture::stacked();
+    std::fs::write(f.0.join(".git/gitbutler/virtual_branches.toml"), "{").unwrap();
+    let error = Repository::load(&f.0, None).unwrap_err();
+    assert!(format!("{error:#}").contains("Couldn't parse GitButler"));
+}
+
+#[test]
+fn local_worktrees_watch_shared_refs_and_reconcile_branch_creation_and_deletion() {
+    let f = Fixture::new();
+    f.commit("base.txt", "base\n");
+    let worktree = f.0.join("review-worktree");
+    git(
+        &f.0,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            worktree.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    let repo = Repository::load(&worktree, None).unwrap();
+    assert!(repo.is_local());
+    assert_ne!(repo.git_dir, repo.common_dir);
+    assert_eq!(repo.stacks[0].branches[0].name, "feature");
+    let watcher = RepoWatcher::new(&repo).unwrap();
+    git(&f.0, &["branch", "new-branch"]).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !watcher.events.is_pending() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        watcher.events.is_pending(),
+        "watcher missed a shared branch ref"
+    );
+    let updated = Repository::load(&worktree, None).unwrap();
+    assert!(
+        updated
+            .stacks
+            .iter()
+            .any(|stack| stack.branches[0].name == "new-branch")
+    );
+    git(&f.0, &["branch", "-D", "new-branch"]).unwrap();
+    let updated = Repository::load(&worktree, None).unwrap();
+    assert!(
+        !updated
+            .stacks
+            .iter()
+            .any(|stack| stack.branches[0].name == "new-branch")
+    );
 }
 
 #[test]
@@ -968,17 +1156,22 @@ fn live_repository_diffs() {
         for branch in &stack.branches {
             git(
                 &repo.root,
-                &["merge-base", "--is-ancestor", &branch.base, &branch.tip],
+                &[
+                    "merge-base",
+                    "--is-ancestor",
+                    branch.base().unwrap(),
+                    &branch.tip,
+                ],
             )
             .unwrap_or_else(|e| panic!("{} has a divergent lower boundary: {e}", branch.name));
-            let patch = repo.patch(&branch.base, &branch.tip).unwrap();
+            let patch = repo.patch(branch.base().unwrap(), &branch.tip).unwrap();
             let parsed = DiffFile::parse(&patch).unwrap_or_else(|e| panic!("{}: {e}", branch.name));
             branches += 1;
             files += parsed.len();
         }
         let first = stack.branches.first().unwrap();
         let last = stack.branches.last().unwrap();
-        DiffFile::parse(&repo.patch(&first.base, &last.tip).unwrap()).unwrap();
+        DiffFile::parse(&repo.patch(first.base().unwrap(), &last.tip).unwrap()).unwrap();
     }
     println!(
         "Validated {} stacks, {branches} branch diffs, {files} changed-file entries, and all combined stack diffs",

@@ -140,6 +140,7 @@ impl ReviewApp {
         let repo_key = self.repo_ui_key();
         let state = self.session.repositories.entry(repo_key).or_default();
         state.selection = self.selection.clone();
+        state.base_override = self.base_override.clone();
         state.wrap = self.wrap;
         state.split = self.mode == DiffMode::Split;
         state.show_comments = self.show_comments;
@@ -162,6 +163,7 @@ impl ReviewApp {
             .cloned()
             .unwrap_or_default();
         self.selection = state.selection;
+        self.base_override = state.base_override;
         self.wrap = state.wrap;
         self.mode = if state.split {
             DiffMode::Split

@@ -41,11 +41,18 @@ impl ReviewApp {
                 for branch in &stack.branches {
                     let review = branch.review.as_deref().unwrap_or("");
                     sections[1].1.push((
-                        format!("{} · stack {} {review}", branch.name, index + 1),
+                        if repo.is_local() {
+                            branch.name.clone()
+                        } else {
+                            format!("{} · stack {} {review}", branch.name, index + 1)
+                        },
                         Target::Branch(stack.id.clone(), branch.name.clone()),
                     ));
                 }
-                if let (Some(first), Some(last)) = (stack.branches.first(), stack.branches.last()) {
+                if !repo.is_local()
+                    && let (Some(first), Some(last)) =
+                        (stack.branches.first(), stack.branches.last())
+                {
                     sections[2].1.push((
                         format!(
                             "Stack {} · {} → {} · {} branches",
@@ -145,5 +152,88 @@ impl ReviewApp {
                     content.child(command)
                 })
         });
+    }
+
+    pub(super) fn open_base_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let path = self.path.clone();
+        cx.spawn(async move |this, cx| {
+            let requested_path = path.clone();
+            let refs = cx
+                .background_spawn(async move { Repository::base_refs(&path) })
+                .await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                if view.path != requested_path || window.has_active_dialog(cx) {
+                    return;
+                }
+                let refs = match refs {
+                    Ok(refs) => refs,
+                    Err(error) => {
+                        view.error = Some(format!("Couldn't list base branches: {error:#}"));
+                        cx.notify();
+                        return;
+                    }
+                };
+                let state = cx.new(|cx| CommandState::new(window, cx));
+                let owner = cx.weak_entity();
+                let focus_on_mount = Rc::new(std::cell::Cell::new(true));
+                window.open_dialog(cx, move |dialog, _, _| {
+                    let state = state.clone();
+                    let owner = owner.clone();
+                    let refs = refs.clone();
+                    let focus_on_mount = focus_on_mount.clone();
+                    dialog.title("Choose base branch").max_w(px(640.)).content(
+                        move |content, window, cx| {
+                            if focus_on_mount.replace(false) {
+                                let state = state.clone();
+                                window.defer(cx, move |window, cx| {
+                                    state.read(cx).focus_handle(cx).focus(window, cx)
+                                });
+                            }
+                            let targets = refs.clone();
+                            let owner = owner.clone();
+                            content.child(
+                                Command::new(&state)
+                                    .bordered(false)
+                                    .placeholder("Search local or remote branches…")
+                                    .max_h(px(400.))
+                                    .item(CommandItem::new().label("Automatic base"))
+                                    .items(refs.iter().map(|reference| {
+                                        CommandItem::new().label(format!(
+                                            "{} · {}",
+                                            repository::short_ref(reference),
+                                            if reference.starts_with("refs/heads/") {
+                                                "local"
+                                            } else {
+                                                "remote"
+                                            }
+                                        ))
+                                    }))
+                                    .on_confirm(move |index, window, cx| {
+                                        let base = if index.row == 0 {
+                                            None
+                                        } else {
+                                            let Some(reference) = targets.get(index.row - 1) else {
+                                                return;
+                                            };
+                                            Some(reference.clone())
+                                        };
+                                        window.close_dialog(cx);
+                                        let _ = owner.update(cx, |view, cx| {
+                                            view.remember_comparison(cx);
+                                            view.base_override = base;
+                                            view.refresh(cx);
+                                            window.focus(&view.focus, cx);
+                                        });
+                                    }),
+                            )
+                        },
+                    )
+                });
+            });
+        })
+        .detach();
     }
 }

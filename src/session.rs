@@ -56,6 +56,7 @@ impl Comparison {
 #[serde(default)]
 pub struct RepoState {
     pub selection: Option<Selection>,
+    pub base_override: Option<String>,
     pub wrap: bool,
     pub split: bool,
     pub show_comments: bool,
@@ -72,6 +73,7 @@ impl Default for RepoState {
     fn default() -> Self {
         Self {
             selection: None,
+            base_override: None,
             wrap: false,
             split: false,
             show_comments: false,
@@ -205,6 +207,7 @@ mod tests {
             "/repo".into(),
             RepoState {
                 selection: Some(selection.clone()),
+                base_override: Some("refs/heads/main".into()),
                 wrap: true,
                 split: true,
                 show_branches: false,
