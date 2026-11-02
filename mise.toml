@@ -28,7 +28,7 @@ run = "sh scripts/bundle-macos.sh debug"
 [tasks.sign]
 description = "Build and ad-hoc sign the release app"
 depends = ["app"]
-run = "codesign --force --deep --sign - 'target/release/Butler Diff.app'"
+run = "codesign --force --deep --sign - 'target/release/Gander.app'"
 
 [tasks.install]
 description = "Build, sign, and install in /Applications"
@@ -38,20 +38,20 @@ run = "sh scripts/install-macos.sh"
 [tasks.app-run]
 description = "Build, sign, and open the release app"
 depends = ["sign"]
-run = "open 'target/release/Butler Diff.app' --args"
+run = "open 'target/release/Gander.app' --args"
 
 [tasks.app-dev]
-description = "Build the separate Butler Diff Dev.app"
+description = "Build the separate Gander Dev.app"
 run = "sh scripts/bundle-macos.sh debug dev"
 
 [tasks.dev]
-description = "Rebuild and restart Butler Diff Dev in the background (optional repository argument)"
+description = "Rebuild and restart Gander Dev in the background (optional repository argument)"
 depends = ["app-dev"]
 run = "sh scripts/run-dev.sh"
 
 [tasks.verify-signature]
 description = "Verify the release app signature"
-run = "codesign --verify --deep --strict --verbose=2 'target/release/Butler Diff.app'"
+run = "codesign --verify --deep --strict --verbose=2 'target/release/Gander.app'"
 
 [tasks.check]
 description = "Check formatting and lint all Rust targets"

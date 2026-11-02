@@ -1,50 +1,44 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
-  <title id="title">Butler Diff</title>
-  <desc id="description">Muted purple stacked review cards with a branching Git graph, a coral minus, and a mint plus.</desc>
+  <title id="title">Gander</title>
+  <desc id="description">An inquisitive white goose taking a gander at a code review, on a plum background.</desc>
   <defs>
     <linearGradient id="background" x1="160" y1="96" x2="848" y2="960" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#563b69"/>
-      <stop offset="1" stop-color="#251730"/>
+      <stop stop-color="#644777"/>
+      <stop offset="1" stop-color="#2d2039"/>
     </linearGradient>
-    <linearGradient id="paper" x1="292" y1="300" x2="740" y2="804" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#fffefa"/>
-      <stop offset="1" stop-color="#ece7f3"/>
-    </linearGradient>
-    <linearGradient id="mint" x1="594" y1="592" x2="686" y2="710" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#3bc799"/>
-      <stop offset="1" stop-color="#159875"/>
-    </linearGradient>
-    <linearGradient id="coral" x1="594" y1="372" x2="686" y2="490" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ff897f"/>
-      <stop offset="1" stop-color="#eb5e72"/>
+    <linearGradient id="feathers" x1="330" y1="270" x2="570" y2="790" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffef7"/>
+      <stop offset="1" stop-color="#e9e3f0"/>
     </linearGradient>
     <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="24" stdDeviation="22" flood-color="#100817" flood-opacity=".32"/>
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#160e1f" flood-opacity=".3"/>
     </filter>
   </defs>
 
   <rect x="64" y="64" width="896" height="896" rx="202" fill="url(#background)"/>
-  <rect x="65" y="65" width="894" height="894" rx="201" fill="none" stroke="#fff" stroke-opacity=".11" stroke-width="2"/>
+  <rect x="65" y="65" width="894" height="894" rx="201" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width="2"/>
 
+  <path d="M380 758V814H337M482 759V814H439" fill="none" stroke="#f7ad67" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
   <g filter="url(#shadow)">
-    <rect x="292" y="206" width="490" height="518" rx="54" transform="rotate(9 537 465)" fill="#806696" stroke="#fff" stroke-opacity=".16" stroke-width="3"/>
-    <rect x="250" y="250" width="536" height="524" rx="56" transform="rotate(4 518 512)" fill="#b7a5cb" stroke="#fff" stroke-opacity=".24" stroke-width="3"/>
-    <rect x="214" y="298" width="592" height="510" rx="60" fill="url(#paper)"/>
-    <rect x="215.5" y="299.5" width="589" height="507" rx="58.5" fill="none" stroke="#fff" stroke-opacity=".7" stroke-width="3"/>
+    <path d="M275 592L218 559Q219 626 262 653C258 713 307 769 391 781C477 794 562 775 597 724C627 681 609 636 560 608V405C587 399 611 381 621 355C639 309 612 264 565 252C516 240 469 269 455 317C445 352 454 389 474 416V579C448 551 407 537 365 544C319 551 287 570 275 592Z" fill="url(#feathers)"/>
+    <path d="M606 321L710 350Q723 354 710 365L613 381Q598 358 606 321Z" fill="#f7ad67"/>
+    <path d="M624 354L693 356" fill="none" stroke="#bd733f" stroke-width="7" stroke-linecap="round"/>
+    <path d="M321 630C354 602 424 611 466 663C435 715 373 737 321 696" fill="#d8d0e4"/>
+    <path d="M333 660Q391 648 429 674" fill="none" stroke="#c2b5d2" stroke-width="11" stroke-linecap="round"/>
+    <circle cx="568" cy="320" r="12" fill="#382b45"/>
+    <circle cx="572" cy="316" r="3.5" fill="#fff"/>
+    <path d="M551 294Q567 283 583 292" fill="none" stroke="#7b6a88" stroke-width="8" stroke-linecap="round"/>
   </g>
 
-  <g fill="none" stroke="#50415f" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M378 420V682"/>
-    <path d="M378 550C378 483 642 514 642 432"/>
-    <path d="M378 550C378 617 642 568 642 650"/>
+  <g transform="rotate(9 695 660)" filter="url(#shadow)">
+    <rect x="574" y="534" width="240" height="252" rx="32" fill="#fffdf8"/>
+    <rect x="574" y="534" width="240" height="48" rx="32" fill="#d3c5e1"/>
+    <path d="M574 566H814V582H574Z" fill="#d3c5e1"/>
+    <circle cx="601" cy="558" r="6" fill="#9e88b2"/>
+    <circle cx="623" cy="558" r="6" fill="#9e88b2"/>
+    <path d="M602 631H628" fill="none" stroke="#e9777c" stroke-width="10" stroke-linecap="round"/>
+    <path d="M651 631H778" fill="none" stroke="#e9b6b7" stroke-width="10" stroke-linecap="round"/>
+    <path d="M602 685H628M615 672V698" fill="none" stroke="#289b7b" stroke-width="10" stroke-linecap="round"/>
+    <path d="M651 685H778M651 725H750" fill="none" stroke="#8fcdb7" stroke-width="10" stroke-linecap="round"/>
   </g>
-  <g fill="#f5f4f7" stroke="#50415f" stroke-width="19">
-    <circle cx="378" cy="420" r="27"/>
-    <circle cx="378" cy="682" r="27"/>
-  </g>
-
-  <circle cx="642" cy="432" r="65" fill="url(#coral)"/>
-  <path d="M614 432H670" fill="none" stroke="#fff" stroke-width="17" stroke-linecap="round"/>
-  <circle cx="642" cy="650" r="65" fill="url(#mint)"/>
-  <path d="M614 650H670M642 622V678" fill="none" stroke="#fff" stroke-width="17" stroke-linecap="round"/>
 </svg>

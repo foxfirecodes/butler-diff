@@ -47,7 +47,7 @@ use std::{
 use watch::{Changes, RepoWatcher};
 
 actions!(
-    butler_diff,
+    gander,
     [
         Refresh,
         OpenRepository,
@@ -2033,7 +2033,7 @@ impl Render for ReviewApp {
                                 cx.notify();
                             })),
                     )
-                    .child(div().font_weight(FontWeight::BOLD).child(if self.development { "butler diff dev" } else { "butler diff" }))
+                    .child(div().font_weight(FontWeight::BOLD).child(if self.development { "gander dev" } else { "gander" }))
                     .child(Button::new("jump").small().label("Jump… ⌘K")
                         .accessibility_label("Jump to file, branch, or stack")
                         .on_click(cx.listener(|view, _, window, cx| view.open_jump(window, cx))))
@@ -2264,7 +2264,7 @@ fn main() -> anyhow::Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "butler-diff [REPOSITORY] [--base REF] [--background | --inspect | --mcp [--author NAME]]\n\nNative Git branch and GitButler stack reviews.\nClick a branch; in GitButler repos, shift-click another for a range or click a stack header for the whole stack.\n--base selects the comparison base; the GUI also has a base-branch picker.\n--background opens a window without activating the app.\n--inspect prints repository/branch endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
+                    "gander [REPOSITORY] [--base REF] [--background | --inspect | --mcp [--author NAME]]\n\nNative Git branch and GitButler stack reviews.\nClick a branch; in GitButler repos, shift-click another for a range or click a stack header for the whole stack.\n--base selects the comparison base; the GUI also has a base-branch picker.\n--background opens a window without activating the app.\n--inspect prints repository/branch endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
                 );
                 return Ok(());
             }
@@ -2341,14 +2341,7 @@ fn main() -> anyhow::Result<()> {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(1000.), px(600.))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some(
-                        if development {
-                            "butler diff dev"
-                        } else {
-                            "butler diff"
-                        }
-                        .into(),
-                    ),
+                    title: Some(if development { "gander dev" } else { "gander" }.into()),
                     ..Default::default()
                 }),
                 ..Default::default()

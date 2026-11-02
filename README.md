@@ -1,4 +1,8 @@
-# butler diff
+# gander 🪿
+
+<img src="assets/icon.svg" width="128" alt="Gander, a goose taking a look at a code review">
+
+Take a gander at your code.
 
 A native code review app for Git branches and [GitButler](https://gitbutler.com/) stacks, built with Rust and [GPUI Kit](https://gpui-kit.com/).
 
@@ -17,9 +21,9 @@ Requires Git and Rust 1.98.1 (pinned in `rust-toolchain.toml`). Use `mise instal
 cargo run -- /path/to/repository
 ```
 
-On macOS: `mise run build` builds debug, `mise run app` packages release, and `mise run install` builds/signs/copies it to `/Applications/Butler Diff.app`.
+On macOS: `mise run build` builds debug, `mise run app` packages release, and `mise run install` builds/signs/copies it to `/Applications/Gander.app`.
 
-`mise run dev /path/to/repository` rebuilds/restarts **Butler Diff Dev** in the background, with its own app identity and saved UI state. Repo comments/viewed state remain shared. `mise run icon` regenerates the icon from the SVG.
+`mise run dev /path/to/repository` rebuilds/restarts **Gander Dev** in the background, with its own app identity and saved UI state. Repo comments/viewed state remain shared. `mise run icon` regenerates the icon from the SVG.
 
 Click a branch, click a stack’s **view all**, or **shift-click** another branch to select a range. Use **Groups…** to organize files. **⌘Enter** submits comments; **Escape** closes the composer and keeps a draft for this session.
 
@@ -36,8 +40,8 @@ Add this to your MCP client configuration, replacing both paths:
 ```json
 {
   "mcpServers": {
-    "butler-diff": {
-      "command": "/absolute/path/to/butler-diff/target/debug/butler-diff",
+    "gander": {
+      "command": "/absolute/path/to/gander/target/debug/gander",
       "args": ["/path/to/repository", "--mcp"]
     }
   }
@@ -47,3 +51,5 @@ Add this to your MCP client configuration, replacing both paths:
 Agents can read stacks/local branches/diffs and create, reply to, edit, delete, or resolve comments. Changes appear live in the app. Restart the MCP connection after rebuilding.
 
 Reviews committed changes only. Repo settings, viewed state, and comments live in Git’s common directory (normally `.git`); UI state lives in the app data directory. Working files and Git history are untouched.
+
+Gander preserves existing Butler Diff settings and reviews. Repo data keeps its `butler-diff*` filenames, and existing app state directories remain in use. New installations use Gander's app state directory. `GANDER_STATE_DIR` and `GANDER_INSTALL_DIR` override the state and install locations; the previous `BUTLER_DIFF_*` names are also accepted.

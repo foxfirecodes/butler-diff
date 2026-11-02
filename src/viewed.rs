@@ -8,6 +8,7 @@ use std::{
     path::Path,
 };
 
+// Keep the on-disk identity stable so Gander preserves existing viewed marks.
 pub const STATE_FILE: &str = "butler-diff-viewed.sqlite";
 
 // Identity belongs to the actual file comparison, not the containing commits.

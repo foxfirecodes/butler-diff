@@ -4,6 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::Path};
 
+// Keep the on-disk identity stable so Gander preserves existing file groups.
 pub const CONFIG_FILE: &str = "butler-diff.toml";
 pub const TEST_PATTERN: &str = r"\.test\.tsx$|(^|/)__tests__/|(^|/)tests/.*\.py$";
 
@@ -73,7 +74,7 @@ impl GroupConfig {
         let text = toml::to_string_pretty(self)?;
         // Atomic replacement keeps the watcher from observing a partial config.
         let temporary = path.with_file_name(format!(
-            ".butler-diff-{}-{}.tmp",
+            ".gander-{}-{}.tmp",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?

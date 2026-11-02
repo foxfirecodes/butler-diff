@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-app="$PWD/target/debug/Butler Diff Dev.app"
+app="$PWD/target/debug/Gander Dev.app"
 
 # Restart only this development bundle so newly built code actually runs.
 # The regular app and standalone binaries are left alone.
-python3 - "$app/Contents/MacOS/butler-diff" <<'PY'
+python3 - "$app/Contents/MacOS/gander" <<'PY'
 import os, signal, subprocess, sys, time
 executable = sys.argv[1]
 processes = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, check=True).stdout
@@ -26,7 +26,7 @@ while stopping:
         except ProcessLookupError:
             stopping.remove(pid)
     if stopping and time.monotonic() >= deadline:
-        sys.exit('Butler Diff Dev did not exit; refusing to launch an older build.')
+        sys.exit('Gander Dev did not exit; refusing to launch an older build.')
     if stopping:
         time.sleep(0.05)
 PY

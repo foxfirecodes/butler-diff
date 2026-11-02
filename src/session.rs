@@ -122,29 +122,43 @@ impl Session {
 }
 
 pub fn state_path() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("BUTLER_DIFF_STATE_DIR") {
+    if let Some(dir) =
+        std::env::var_os("GANDER_STATE_DIR").or_else(|| std::env::var_os("BUTLER_DIFF_STATE_DIR"))
+    {
         return Some(PathBuf::from(dir).join("session.json"));
     }
     let home = PathBuf::from(std::env::var_os("HOME")?);
     let development = crate::launch::is_development();
     #[cfg(target_os = "macos")]
-    let dir = home
-        .join("Library/Application Support")
-        .join(if development {
-            "Butler Diff Dev"
-        } else {
-            "Butler Diff"
-        });
+    let parent = home.join("Library/Application Support");
     #[cfg(not(target_os = "macos"))]
-    let dir = std::env::var_os("XDG_STATE_HOME")
+    let parent = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/state"))
-        .join(if development {
-            "butler-diff-dev"
-        } else {
-            "butler-diff"
-        });
-    Some(dir.join("session.json"))
+        .unwrap_or_else(|| home.join(".local/state"));
+    Some(default_state_path(&parent, development))
+}
+
+fn default_state_path(parent: &Path, development: bool) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    let (current, legacy) = if development {
+        ("Gander Dev", "Butler Diff Dev")
+    } else {
+        ("Gander", "Butler Diff")
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (current, legacy) = if development {
+        ("gander-dev", "butler-diff-dev")
+    } else {
+        ("gander", "butler-diff")
+    };
+    let current = parent.join(current).join("session.json");
+    let legacy = parent.join(legacy).join("session.json");
+    // Existing installations keep their saved state through the Gander rename.
+    if !current.exists() && legacy.is_file() {
+        legacy
+    } else {
+        current
+    }
 }
 
 #[derive(Clone)]
@@ -184,9 +198,42 @@ impl Store {
 mod tests {
     use super::*;
     #[test]
+    fn renamed_app_preserves_legacy_state_and_prefers_its_own_state() {
+        let parent = std::env::temp_dir().join(format!("gander-state-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        for development in [false, true] {
+            let current = default_state_path(&parent, development);
+            #[cfg(target_os = "macos")]
+            let legacy = parent
+                .join(if development {
+                    "Butler Diff Dev"
+                } else {
+                    "Butler Diff"
+                })
+                .join("session.json");
+            #[cfg(not(target_os = "macos"))]
+            let legacy = parent
+                .join(if development {
+                    "butler-diff-dev"
+                } else {
+                    "butler-diff"
+                })
+                .join("session.json");
+            assert_ne!(current, legacy);
+            std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+            std::fs::write(&legacy, serde_json::to_vec(&Session::default()).unwrap()).unwrap();
+            assert_eq!(default_state_path(&parent, development), legacy);
+            std::fs::create_dir_all(current.parent().unwrap()).unwrap();
+            std::fs::write(&current, serde_json::to_vec(&Session::default()).unwrap()).unwrap();
+            assert_eq!(default_state_path(&parent, development), current);
+        }
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[test]
     fn repo_and_comparison_state_roundtrip_and_stale_writes_are_ignored() {
         let path = std::env::temp_dir()
-            .join(format!("butler-diff-session-{}", std::process::id()))
+            .join(format!("gander-session-{}", std::process::id()))
             .join("session.json");
         let store = Store::new(path.clone());
         let mut session = Session::default();
@@ -262,7 +309,7 @@ mod tests {
     #[test]
     fn missing_state_defaults_but_malformed_and_future_state_are_rejected() {
         let path = std::env::temp_dir().join(format!(
-            "butler-diff-session-invalid-{}.json",
+            "gander-session-invalid-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

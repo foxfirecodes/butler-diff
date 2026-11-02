@@ -22,13 +22,11 @@ mod tests {
     #[test]
     fn development_marker_is_scoped_to_an_app_bundle() {
         assert_eq!(
-            development_marker(Path::new(
-                "/apps/Butler Diff Dev.app/Contents/MacOS/butler-diff"
-            )),
+            development_marker(Path::new("/apps/Gander Dev.app/Contents/MacOS/gander")),
             Some(PathBuf::from(
-                "/apps/Butler Diff Dev.app/Contents/Resources/Development"
+                "/apps/Gander Dev.app/Contents/Resources/Development"
             ))
         );
-        assert!(development_marker(Path::new("/repo/target/debug/butler-diff")).is_none());
+        assert!(development_marker(Path::new("/repo/target/debug/gander")).is_none());
     }
 }

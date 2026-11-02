@@ -9,7 +9,7 @@ command -v rsvg-convert >/dev/null 2>&1 || {
     exit 1
 }
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/butler-diff-icon.XXXXXX")"
+work="$(mktemp -d "${TMPDIR:-/tmp}/gander-icon.XXXXXX")"
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 iconset="$work/AppIcon.iconset"
 mkdir -p "$iconset"

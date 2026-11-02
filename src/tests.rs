@@ -15,7 +15,7 @@ static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 impl Fixture {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "butler-diff-test-{}-{}-{}",
+            "gander-test-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -232,6 +232,7 @@ fn mcp_initializes_and_agents_can_create_read_reply_and_resolve() {
     );
     let init = server.handle(request(1, "initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-agent","version":"1"}}))).unwrap();
     assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(init["result"]["serverInfo"]["name"], "gander");
     assert!(
         server
             .handle(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
@@ -1146,9 +1147,11 @@ fn local_worktrees_watch_shared_refs_and_reconcile_branch_creation_and_deletion(
 }
 
 #[test]
-#[ignore = "set BUTLER_DIFF_TEST_REPO to smoke-test an existing repository read-only"]
+#[ignore = "set GANDER_TEST_REPO to smoke-test an existing repository read-only"]
 fn live_repository_diffs() {
-    let path = std::env::var_os("BUTLER_DIFF_TEST_REPO").expect("set BUTLER_DIFF_TEST_REPO");
+    let path = std::env::var_os("GANDER_TEST_REPO")
+        .or_else(|| std::env::var_os("BUTLER_DIFF_TEST_REPO"))
+        .expect("set GANDER_TEST_REPO");
     let repo = Repository::load(Path::new(&path), None).unwrap();
     let mut branches = 0;
     let mut files = 0;

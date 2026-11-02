@@ -12,6 +12,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+// Keep the on-disk identity stable so Gander can read existing reviews.
 pub const STATE_FILE: &str = "butler-diff-comments.sqlite";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]

@@ -1,5 +1,5 @@
 [package]
-name = "butler-diff"
+name = "gander"
 version = "0.1.0"
 edition = "2024"
 description = "A fast, read-only Git branch and GitButler stack review tool"
