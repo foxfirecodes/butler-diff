@@ -12,6 +12,7 @@ A native code review app for Git branches and [GitButler](https://gitbutler.com/
 - Persistent viewed files that reset when their diff changes.
 - Remembers your repo, branch range, collapsed files/groups, view options, pane widths, and last file.
 - Markdown comments, replies, edit/delete/undo, and live agent collaboration over MCP.
+- Independent review windows for multiple repositories or comparisons.
 
 ## Run
 
@@ -33,9 +34,21 @@ The automatic base for regular repositories is `origin/HEAD` when available, the
 
 Use **⌘K** to jump to a file, branch, or stack. **⌥← / ⌥→** or **⌥[ / ⌥]** goes back/forward through visited files.
 
+Use **⌘N** (or **⋯ → New window**) for another independent review window. **Open repo…** changes the repository in the active window; **⌘W** closes only that window. The **⋯** menu also contains branch-sidebar, split-diff, line-wrap, and sidebar-placement settings.
+
 ## MCP
 
-Add this to your MCP client configuration, replacing both paths:
+Choose **⋯ → Set up MCP…**, copy the command for **Codex** or **Claude Code**, and run it from the project's directory. Gander adds or updates its own entry while preserving other servers and settings. You can also run the setup directly if `gander` is on your PATH:
+
+```sh
+gander --setup-mcp codex
+# or
+gander --setup-mcp claude
+```
+
+Codex setup writes `.codex/config.toml` and requires a trusted project. Claude Code setup writes `.mcp.json`. Repository resolution stays relative to the open project: Codex uses its current project directory, and Claude Code supplies its project root through `CLAUDE_PROJECT_DIR`. Restart the MCP connection after setup.
+
+For other MCP clients, add this to their configuration, replacing both paths:
 
 ```json
 {

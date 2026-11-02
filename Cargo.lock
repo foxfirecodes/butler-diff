@@ -705,22 +705,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "gander"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "gpui-fps",
- "gpui-kit",
- "notify",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "toml 0.9.12+spec-1.1.0",
-]
-
-[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1887,6 +1871,23 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gander"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "gpui-fps",
+ "gpui-kit",
+ "notify",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]

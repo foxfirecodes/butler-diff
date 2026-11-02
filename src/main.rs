@@ -3,6 +3,7 @@ mod file_groups;
 mod jump;
 mod launch;
 mod mcp;
+mod mcp_setup;
 mod navigation;
 mod repository;
 mod review_ui;
@@ -27,6 +28,7 @@ use gpui_kit::component::{
         Enter as InputEnter, Escape as InputEscape, Input, InputEvent, InputState, Textarea,
         TextareaState,
     },
+    menu::DropdownMenu,
     resizable::{HandleEdge, ResizablePanelEvent, ResizableState, resize_handle},
     resizable_panel,
     text::TextView,
@@ -51,6 +53,13 @@ actions!(
     [
         Refresh,
         OpenRepository,
+        NewWindow,
+        CloseWindow,
+        SetupMcp,
+        ToggleBranches,
+        ToggleSplit,
+        ToggleWrap,
+        SwapSidebars,
         ToggleStats,
         SubmitComment,
         NavigateBack,
@@ -63,6 +72,32 @@ actions!(
 struct GroupDraft {
     name: Entity<InputState>,
     pattern: Entity<InputState>,
+}
+
+#[derive(Clone)]
+struct Workspace {
+    session: Rc<RefCell<session::Session>>,
+    store: Option<session::Store>,
+}
+impl Global for Workspace {}
+
+impl Workspace {
+    fn load(path: Option<PathBuf>) -> Self {
+        let (session, store) = match path {
+            Some(path) => match session::Session::load(&path) {
+                Ok(session) => (session, Some(session::Store::new(path))),
+                Err(error) => {
+                    eprintln!("UI state unavailable: {error:#}");
+                    (session::Session::default(), None)
+                }
+            },
+            None => (session::Session::default(), None),
+        };
+        Self {
+            session: Rc::new(RefCell::new(session)),
+            store,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -210,7 +245,7 @@ struct ReviewApp {
     development: bool,
     history: navigation::History,
     pending_navigation: Option<navigation::Visit>,
-    session: session::Session,
+    session: Rc<RefCell<session::Session>>,
     session_store: Option<session::Store>,
     session_task: Option<Task<()>>,
     focused_file: Option<String>,
@@ -277,17 +312,7 @@ impl ReviewApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let state_path = session::state_path();
-        let (session, session_store) = match state_path {
-            Some(path) => match session::Session::load(&path) {
-                Ok(session) => (session, Some(session::Store::new(path))),
-                Err(error) => {
-                    eprintln!("UI state unavailable: {error:#}");
-                    (session::Session::default(), None)
-                }
-            },
-            None => (session::Session::default(), None),
-        };
+        let workspace = cx.global::<Workspace>().clone();
         let diff = cx.new(|cx| DiffState::new([], cx));
         let panels = cx.new(|_| ResizableState::default());
         let panel_sub = cx.subscribe(&panels, |view, panels, _: &ResizablePanelEvent, cx| {
@@ -319,8 +344,8 @@ impl ReviewApp {
             development: launch::is_development(),
             history: navigation::History::default(),
             pending_navigation: None,
-            session,
-            session_store,
+            session: workspace.session,
+            session_store: workspace.store,
             session_task: None,
             focused_file: None,
             loaded_selection: None,
@@ -811,7 +836,7 @@ impl ReviewApp {
                             }
                         }
                         view.collapsed_files = (*view.viewed_files).clone();
-                        let saved = view.saved_comparison().cloned();
+                        let saved = view.saved_comparison();
                         if let Some(saved) = &saved {
                             view.collapsed_files = saved.collapsed_for(
                                 view.files.iter().map(|file| file.path().as_str()),
@@ -871,6 +896,7 @@ impl ReviewApp {
                         view.snapshot_session(cx);
                         view.stash_comment_draft(cx);
                         view.path = path;
+                        window.set_window_title(&review_window_title(&view.path));
                         view.history = navigation::History::default();
                         view.pending_navigation = None;
                         view.base_override = None;
@@ -1828,6 +1854,11 @@ impl ReviewApp {
 
 impl Render for ReviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_branches = self.show_branches;
+        let split = self.mode == DiffMode::Split;
+        let wrap = self.wrap;
+        let swapped = self.sidebars_swapped;
+        let has_repo = self.repo.is_some();
         let endpoints = self.endpoints().ok().flatten();
         let title = endpoints
             .as_ref()
@@ -1998,6 +2029,31 @@ impl Render for ReviewApp {
             .on_action(cx.listener(|view, _: &NavigateBack, _, cx| view.navigate_history(false, cx)))
             .on_action(cx.listener(|view, _: &NavigateForward, _, cx| view.navigate_history(true, cx)))
             .on_action(cx.listener(|view, _: &OpenRepository, _, cx| view.open(cx)))
+            .on_action(cx.listener(|view, _: &NewWindow, _, cx| view.new_window(cx)))
+            .on_action(cx.listener(|view, _: &CloseWindow, window, cx| {
+                view.save_session_now(cx);
+                window.remove_window();
+            }))
+            .on_action(cx.listener(|view, _: &SetupMcp, window, cx| view.open_mcp_setup(window, cx)))
+            .on_action(cx.listener(|view, _: &ToggleBranches, _, cx| {
+                view.show_branches = !view.show_branches;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|view, _: &ToggleSplit, _, cx| {
+                view.mode = if view.mode == DiffMode::Unified { DiffMode::Split } else { DiffMode::Unified };
+                view.diff.update(cx, |state, cx| state.set_mode(view.mode, cx));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|view, _: &ToggleWrap, _, cx| {
+                view.wrap = !view.wrap;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|view, _: &SwapSidebars, _, cx| {
+                view.capture_panel_widths(cx);
+                view.sidebars_swapped = !view.sidebars_swapped;
+                view.reset_panel_layout(cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|view, _: &ToggleStats, _, cx| {
                 view.show_stats = !view.show_stats;
                 cx.notify();
@@ -2022,17 +2078,6 @@ impl Render for ReviewApp {
                         .on_click(cx.listener(|view, _, _, cx| view.navigate_history(true, cx))))
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        Button::new("toggle-branches")
-                            .small()
-                            .label(if self.show_branches { "Hide branches" } else { "Show branches" })
-                            .selected(self.show_branches)
-                            .accessibility_label(if self.show_branches { "Hide branch sidebar" } else { "Show branch sidebar" })
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.show_branches = !view.show_branches;
-                                cx.notify();
-                            })),
-                    )
                     .child(div().font_weight(FontWeight::BOLD).child(if self.development { "gander dev" } else { "gander" }))
                     .child(Button::new("jump").small().label("Jump… ⌘K")
                         .accessibility_label("Jump to file, branch, or stack")
@@ -2074,7 +2119,18 @@ impl Render for ReviewApp {
                                 "Refresh ⌘R"
                             })
                             .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
-                    ),
+                    )
+                    .child(Button::new("review-menu").small().label("⋯")
+                        .accessibility_label("Review options")
+                        .tooltip("Review options")
+                        .dropdown_menu(move |menu, _, _| menu
+                            .menu("New window", Box::new(NewWindow))
+                            .menu_with_enable("Set up MCP…", Box::new(SetupMcp), has_repo)
+                            .separator()
+                            .menu_with_check("Show branch sidebar", show_branches, Box::new(ToggleBranches))
+                            .menu_with_check("Split diff", split, Box::new(ToggleSplit))
+                            .menu_with_check("Wrap lines", wrap, Box::new(ToggleWrap))
+                            .menu_with_check("Swap file and comment sidebars", swapped, Box::new(SwapSidebars)))),
             )
             .child(
                 div()
@@ -2146,25 +2202,6 @@ impl Render for ReviewApp {
                                             ),
                                     )
                                     .child(
-                                        Button::new("mode")
-                                            .small()
-                                            .label(if self.mode == DiffMode::Unified {
-                                                "Split view"
-                                            } else {
-                                                "Unified view"
-                                            })
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                view.mode = if view.mode == DiffMode::Unified {
-                                                    DiffMode::Split
-                                                } else {
-                                                    DiffMode::Unified
-                                                };
-                                                view.diff
-                                                    .update(cx, |s, cx| s.set_mode(view.mode, cx));
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
                                         Button::new("comments")
                                             .small()
                                             .selected(self.show_comments)
@@ -2174,29 +2211,6 @@ impl Render for ReviewApp {
                                                 view.show_comments = !view.show_comments;
                                                 view.reset_panel_layout(cx);
                                                 view.reload_comments(cx);
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("swap-sidebars")
-                                            .small()
-                                            .label("Swap sidebars")
-                                            .selected(self.sidebars_swapped)
-                                            .accessibility_label("Swap file and comment sidebars")
-                                            .tooltip(if self.sidebars_swapped { "Move files left and comments right" } else { "Move comments left and files right" })
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                view.capture_panel_widths(cx);
-                                                view.sidebars_swapped = !view.sidebars_swapped;
-                                                view.reset_panel_layout(cx);
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("wrap")
-                                            .small()
-                                            .label(if self.wrap { "Unwrap" } else { "Wrap lines" })
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                view.wrap = !view.wrap;
                                                 cx.notify();
                                             })),
                                     ),
@@ -2237,6 +2251,45 @@ impl Render for ReviewApp {
     }
 }
 
+fn review_window_title(path: &std::path::Path) -> String {
+    format!(
+        "{} — {}",
+        if launch::is_development() {
+            "gander dev"
+        } else {
+            "gander"
+        },
+        path.display()
+    )
+}
+
+fn open_review_window(
+    path: PathBuf,
+    base: Option<String>,
+    background: bool,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    let mut bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+    let offset = px((cx.windows().len() % 8) as f32 * 24.);
+    bounds.origin += point(offset, offset);
+    let title = review_window_title(&path);
+    open_window(
+        WindowOptions {
+            focus: !background,
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(1000.), px(600.))),
+            titlebar: Some(TitlebarOptions {
+                title: Some(title.into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        cx,
+        move |window, cx| cx.new(|cx| ReviewApp::new(path, base, window, cx)),
+    )?;
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let mut path = None;
     let mut base = None;
@@ -2244,6 +2297,7 @@ fn main() -> anyhow::Result<()> {
     let mut serve_mcp = false;
     let mut author = None;
     let mut background = false;
+    let mut setup_mcp = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -2256,6 +2310,11 @@ fn main() -> anyhow::Result<()> {
             "--inspect" => inspect = true,
             "--background" => background = true,
             "--mcp" => serve_mcp = true,
+            "--setup-mcp" => {
+                setup_mcp = Some(mcp_setup::Client::parse(&args.next().ok_or_else(
+                    || anyhow::anyhow!("--setup-mcp requires codex or claude"),
+                )?)?)
+            }
             "--author" => {
                 author = Some(
                     args.next()
@@ -2264,7 +2323,7 @@ fn main() -> anyhow::Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "gander [REPOSITORY] [--base REF] [--background | --inspect | --mcp [--author NAME]]\n\nNative Git branch and GitButler stack reviews.\nClick a branch; in GitButler repos, shift-click another for a range or click a stack header for the whole stack.\n--base selects the comparison base; the GUI also has a base-branch picker.\n--background opens a window without activating the app.\n--inspect prints repository/branch endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
+                    "gander [REPOSITORY] [--base REF] [--background | --inspect | --mcp [--author NAME]]\ngander --setup-mcp <codex|claude>\n\nNative Git branch and GitButler stack reviews.\nClick a branch; in GitButler repos, shift-click another for a range or click a stack header for the whole stack.\n⌘N opens another review window; ⌘W closes the active window.\n--setup-mcp adds Gander to the current project's MCP configuration.\n--base selects the comparison base; the GUI also has a base-branch picker.\n--background opens a window without activating the app.\n--inspect prints repository/branch endpoints as JSON without opening a window.\n--mcp runs the local review-comment MCP server over stdio without opening a window.\n--author labels MCP comments; defaults to the connected client's name."
                 );
                 return Ok(());
             }
@@ -2277,7 +2336,32 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    if let Some(client) = setup_mcp {
+        if path.is_some()
+            || base.is_some()
+            || inspect
+            || serve_mcp
+            || author.is_some()
+            || background
+        {
+            anyhow::bail!("Run --setup-mcp <codex|claude> by itself in the project's directory.");
+        }
+        let path =
+            mcp_setup::install(&std::env::current_dir()?, &std::env::current_exe()?, client)?;
+        println!(
+            "Configured Gander for {} in {}. Restart the MCP connection to load it.",
+            client.name(),
+            path.display()
+        );
+        return Ok(());
+    }
     let path = path
+        .or_else(|| {
+            serve_mcp
+                .then(|| std::env::var_os("CLAUDE_PROJECT_DIR"))
+                .flatten()
+                .map(PathBuf::from)
+        })
         .or_else(|| {
             if inspect || serve_mcp {
                 return None;
@@ -2308,6 +2392,7 @@ fn main() -> anyhow::Result<()> {
     let background = background || development;
     application().with_assets(assets::Assets).run(move |cx| {
         init(cx);
+        cx.set_global(Workspace::load(session::state_path()));
         Theme::change(ThemeMode::Dark, None, cx);
         cx.bind_keys([
             KeyBinding::new("cmd-r", Refresh, Some("Review")),
@@ -2320,6 +2405,8 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new("cmd-]", NavigateForward, Some("Review")),
             KeyBinding::new("ctrl-r", Refresh, Some("Review")),
             KeyBinding::new("cmd-o", OpenRepository, Some("Review")),
+            KeyBinding::new("cmd-n", NewWindow, Some("Review")),
+            KeyBinding::new("cmd-w", CloseWindow, Some("Review")),
             KeyBinding::new("cmd-shift-p", ToggleStats, Some("Review")),
             KeyBinding::new("ctrl-shift-p", ToggleStats, Some("Review")),
             KeyBinding::new("escape", InputEscape, Some("CommentComposer")),
@@ -2328,28 +2415,24 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.set_menus([
+            Menu::new(if development { "Gander Dev" } else { "Gander" })
+                .items([MenuItem::action("Quit", Quit)]),
+            Menu::new("File").items([
+                MenuItem::action("New Window", NewWindow),
+                MenuItem::action("Open Repository…", OpenRepository),
+                MenuItem::action("Set Up MCP…", SetupMcp),
+                MenuItem::separator(),
+                MenuItem::action("Close Window", CloseWindow),
+            ]),
+        ]);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
             }
         })
         .detach();
-        let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
-        open_window(
-            WindowOptions {
-                focus: !background,
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(1000.), px(600.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(if development { "gander dev" } else { "gander" }.into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            cx,
-            move |window, cx| cx.new(|cx| ReviewApp::new(path, base, window, cx)),
-        )
-        .expect("Couldn't open app window");
+        open_review_window(path, base, background, cx).expect("Couldn't open app window");
         if !background {
             cx.activate(true);
         }

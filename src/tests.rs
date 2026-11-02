@@ -71,6 +71,169 @@ head = {{ CommitId = "{upper}" }}
         (f, base, lower, upper)
     }
 }
+
+#[test]
+fn mcp_setup_is_project_local_preserves_other_servers_and_is_repeatable() {
+    use crate::mcp_setup::{self, Client};
+    let fixture = Fixture::new();
+    let project = fixture.0.join("nested-project");
+    std::fs::create_dir_all(project.join(".codex")).unwrap();
+    std::fs::write(
+        project.join(".codex/config.toml"),
+        "# my settings\nmodel = 'test-model'\n[mcp_servers.other]\ncommand = 'other-server'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join(".mcp.json"),
+        r#"{"otherSetting":true,"mcpServers":{"other":{"command":"other-server"}}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for relative in [".codex/config.toml", ".mcp.json"] {
+            std::fs::set_permissions(
+                project.join(relative),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+    }
+    let executable = Path::new("/Applications/Gander.app/Contents/MacOS/gander");
+    for client in [Client::Codex, Client::Claude] {
+        let path = mcp_setup::install(&project, executable, client).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        mcp_setup::install(&project, executable, client).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert!(
+            !first.contains(project.to_str().unwrap()),
+            "project location must remain relative"
+        );
+    }
+    let codex = std::fs::read_to_string(project.join(".codex/config.toml")).unwrap();
+    assert!(codex.contains("# my settings"));
+    let codex: toml::Value = toml::from_str(&codex).unwrap();
+    assert_eq!(codex["model"].as_str(), Some("test-model"));
+    assert_eq!(
+        codex["mcp_servers"]["other"]["command"].as_str(),
+        Some("other-server")
+    );
+    assert_eq!(codex["mcp_servers"]["gander"]["cwd"].as_str(), Some("."));
+    assert_eq!(
+        codex["mcp_servers"]["gander"]["args"].as_array().unwrap(),
+        &vec![
+            toml::Value::String("--mcp".into()),
+            toml::Value::String(".".into())
+        ]
+    );
+    let claude: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.join(".mcp.json")).unwrap()).unwrap();
+    assert_eq!(claude["otherSetting"], true);
+    assert_eq!(claude["mcpServers"]["other"]["command"], "other-server");
+    assert_eq!(
+        claude["mcpServers"]["gander"]["args"],
+        serde_json::json!(["--mcp"])
+    );
+    assert_eq!(
+        claude["mcpServers"]["gander"]["command"],
+        executable.to_str().unwrap()
+    );
+    assert!(
+        !fixture.0.join(".codex").exists(),
+        "setup must stay in the selected project"
+    );
+}
+
+#[test]
+fn mcp_setup_rejects_invalid_existing_config_without_overwriting_it() {
+    use crate::mcp_setup::{self, Client};
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.0.join(".codex")).unwrap();
+    for (client, relative, invalid) in [
+        (Client::Codex, ".codex/config.toml", "{"),
+        (Client::Codex, ".codex/config.toml", "mcp_servers = []"),
+        (Client::Claude, ".mcp.json", "{"),
+        (Client::Claude, ".mcp.json", "null"),
+        (Client::Claude, ".mcp.json", r#"{"mcpServers":[]}"#),
+    ] {
+        let path = fixture.0.join(relative);
+        std::fs::write(&path, invalid).unwrap();
+        assert!(mcp_setup::install(&fixture.0, Path::new("/gander"), client).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), invalid);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn copied_setup_commands_quote_executable_paths_without_running_shell_substitutions() {
+    use crate::mcp_setup::{self, Client};
+    use std::{os::unix::fs::PermissionsExt, process::Command};
+    let fixture = Fixture::new();
+    let executable = fixture
+        .0
+        .join("gander ' $(touch unexpected) `touch unexpected`");
+    std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let command = mcp_setup::command(&executable, Client::Codex).unwrap();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(&fixture.0)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "--setup-mcp\ncodex\n"
+    );
+    assert!(!fixture.0.join("unexpected").exists());
+}
+
+#[test]
+fn review_windows_share_session_updates_and_serialize_saves_without_losing_other_repositories() {
+    use crate::{Workspace, session::RepoState};
+    let fixture = Fixture::new();
+    let path = fixture.0.join("session.json");
+    let first = Workspace::load(Some(path.clone()));
+    let second = first.clone();
+    first.session.borrow_mut().repositories.insert(
+        "/first".into(),
+        RepoState {
+            wrap: true,
+            ..Default::default()
+        },
+    );
+    let store = first.store.as_ref().unwrap();
+    let stale = store.next();
+    let old_snapshot = first.session.borrow().clone();
+    second.session.borrow_mut().repositories.insert(
+        "/second".into(),
+        RepoState {
+            base_override: Some("main".into()),
+            ..Default::default()
+        },
+    );
+    let other_store = second.store.as_ref().unwrap();
+    other_store
+        .save(&second.session.borrow(), other_store.next())
+        .unwrap();
+    store.save(&old_snapshot, stale).unwrap();
+    let saved = crate::session::Session::load(&path).unwrap();
+    assert!(saved.repositories["/first"].wrap);
+    assert_eq!(
+        saved.repositories["/second"].base_override.as_deref(),
+        Some("main")
+    );
+    assert_eq!(saved, *first.session.borrow());
+}
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);

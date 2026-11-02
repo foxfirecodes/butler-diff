@@ -1,6 +1,70 @@
 use super::*;
+use gpui_kit::component::WindowExt;
 
 impl ReviewApp {
+    pub(super) fn new_window(&mut self, cx: &mut Context<Self>) {
+        self.snapshot_session(cx);
+        if let Err(error) =
+            open_review_window(self.path.clone(), self.base_override.clone(), false, cx)
+        {
+            self.error = Some(format!("Couldn't open a window: {error:#}"));
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_mcp_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let executable = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        let project = self
+            .repo
+            .as_ref()
+            .map(|repo| &repo.root)
+            .unwrap_or(&self.path)
+            .display()
+            .to_string();
+        let commands: anyhow::Result<Vec<_>> =
+            [mcp_setup::Client::Codex, mcp_setup::Client::Claude]
+                .into_iter()
+                .map(|client| Ok((client, mcp_setup::command(&executable, client)?)))
+                .collect();
+        let commands = match commands {
+            Ok(commands) => commands,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        window.open_dialog(cx, move |dialog, _, _| {
+            let commands = commands.clone();
+            let project = project.clone();
+            dialog.title("Set up Gander MCP").max_w(px(720.)).content(move |content, _, cx| {
+                let mut content = content.gap_3().child("Run a command from this project's directory:")
+                    .child(div().text_color(cx.theme().muted_foreground).child(project.clone()));
+                for (client, command) in &commands {
+                    let command = command.clone();
+                    let copy = command.clone();
+                    content = content.child(div().flex().flex_col().gap_2().p_3().rounded_md().border_1().border_color(cx.theme().border)
+                        .child(div().flex().items_center().justify_between().child(client.name())
+                            .child(Button::new(SharedString::from(format!("copy-mcp-{}", client.flag())))
+                                .small().label("Copy command").accessibility_label(format!("Copy {} MCP setup command", client.name()))
+                                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))))
+                        .child(div().text_xs().whitespace_normal().child(command)));
+                }
+                content.child("Adds Gander to this project's configuration. Other servers stay intact. Restart the MCP connection afterward; Codex also requires a trusted project.")
+            })
+        });
+    }
+
     pub(super) fn current_visit(&self, cx: &App) -> Option<navigation::Visit> {
         let selection = self.loaded_selection.clone()?;
         let file = self
@@ -92,12 +156,14 @@ impl ReviewApp {
         self.path.to_string_lossy().into_owned()
     }
 
-    pub(super) fn saved_comparison(&self) -> Option<&session::Comparison> {
+    pub(super) fn saved_comparison(&self) -> Option<session::Comparison> {
         self.session
+            .borrow()
             .repositories
             .get(&self.repo_ui_key())?
             .comparisons
             .get(&self.selection.as_ref()?.key())
+            .cloned()
     }
 
     pub(super) fn remember_comparison(&mut self, cx: &App) {
@@ -128,6 +194,7 @@ impl ReviewApp {
         let key = selection.key();
         let repo_key = self.repo_ui_key();
         self.session
+            .borrow_mut()
             .repositories
             .entry(repo_key)
             .or_default()
@@ -138,7 +205,8 @@ impl ReviewApp {
     pub(super) fn snapshot_session(&mut self, cx: &App) -> session::Session {
         self.remember_comparison(cx);
         let repo_key = self.repo_ui_key();
-        let state = self.session.repositories.entry(repo_key).or_default();
+        let mut session = self.session.borrow_mut();
+        let state = session.repositories.entry(repo_key).or_default();
         state.selection = self.selection.clone();
         state.base_override = self.base_override.clone();
         state.wrap = self.wrap;
@@ -151,13 +219,14 @@ impl ReviewApp {
         state.comment_width = self.comment_panel_width;
         state.filter = self.filter.read(cx).value().to_string();
         state.collapsed_groups = self.collapsed_groups.clone();
-        self.session.last_repo = Some(self.path.clone());
-        self.session.clone()
+        session.last_repo = Some(self.path.clone());
+        session.clone()
     }
 
     pub(super) fn restore_repo_ui(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = self
             .session
+            .borrow()
             .repositories
             .get(&self.repo_ui_key())
             .cloned()
