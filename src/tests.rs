@@ -73,6 +73,257 @@ head = {{ CommitId = "{upper}" }}
 }
 
 #[test]
+fn semantic_reads_page_large_comparisons_and_only_allow_delivered_evidence() {
+    use crate::{
+        acp::Cancellation,
+        semantic::{Evidence, Side},
+        semantic_source::Snapshot,
+    };
+    use serde_json::json;
+    let f = Fixture::new();
+    let base = f.commit("large.txt", "before\n");
+    for index in 0..60 {
+        std::fs::write(
+            f.0.join(format!("file-{index:02}.txt")),
+            format!("entry {index}\n"),
+        )
+        .unwrap();
+    }
+    let content: String = (1..=4000)
+        .map(|i| format!("committed line {i:04}: {}\n", "content ".repeat(8)))
+        .collect();
+    std::fs::write(f.0.join("large.txt"), content).unwrap();
+    git(&f.0, &["add", "."]).unwrap();
+    git(&f.0, &["commit", "-qm", "large comparison"]).unwrap();
+    let tip = git(&f.0, &["rev-parse", "HEAD"]).unwrap().trim().to_owned();
+    let repo = Repository::load(&f.0, None).unwrap();
+    let patch = repo.patch(&base, &tip).unwrap();
+    assert!(patch.len() > 180_000);
+    let mut source = Snapshot::new(&f.0, &base, &tip, &patch, Cancellation::default()).unwrap();
+    let first = source.inventory(0).unwrap();
+    assert_eq!(first["files"].as_array().unwrap().len(), 50);
+    let rest = source
+        .inventory(first["next_offset"].as_u64().unwrap() as usize)
+        .unwrap();
+    assert_eq!(rest["files"].as_array().unwrap().len(), 11);
+    assert!(rest["next_offset"].is_null());
+    let last = Evidence {
+        path: "large.txt".into(),
+        side: Side::Modified,
+        start_line: 4000,
+        end_line: 4000,
+    };
+    assert!(!source.scope.contains(&last));
+    let coverage = source.coverage(&source.scope);
+    assert_eq!(coverage.read_lines, 0);
+    assert_eq!(coverage.total_lines, 4061);
+    assert_eq!(coverage.partial_files, 61);
+    let (mut offset, mut pages, mut changed) = (0, 0, 0);
+    loop {
+        let page = source
+            .call(
+                "gander_read_diff",
+                &json!({"path":"large.txt","start_line":offset,"line_count":200}),
+            )
+            .unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() < 26 * 1024);
+        for line in page["lines"].as_array().unwrap() {
+            if line["modified_line"].as_u64().is_some() {
+                changed += 1;
+            }
+        }
+        pages += 1;
+        match page["next_line"].as_u64() {
+            Some(next) => {
+                assert!(next > offset);
+                offset = next;
+            }
+            None => break,
+        }
+    }
+    assert!(pages > 1);
+    assert_eq!(changed, 4000);
+    assert!(source.scope.contains(&last));
+    let coverage = source.coverage(&source.scope);
+    assert_eq!(coverage.read_lines, 4001);
+    assert_eq!(coverage.partial_files, 60);
+    assert!(!source.scope.contains(&Evidence {
+        end_line: 4001,
+        ..last
+    }));
+}
+
+#[test]
+fn semantic_context_and_search_use_the_selected_commits_across_renames() {
+    use crate::{
+        acp::Cancellation,
+        semantic::{Evidence, Side},
+        semantic_source::Snapshot,
+    };
+    use serde_json::json;
+    let f = Fixture::new();
+    f.commit(
+        "old name:part.ts",
+        "export function save() {\n  return 'before';\n}\n",
+    );
+    let base = f.commit("renderer.ts", "render(save());\n");
+    git(&f.0, &["mv", "old name:part.ts", "new name:part.ts"]).unwrap();
+    let tip = f.commit(
+        "new name:part.ts",
+        "export function save() {\n  return 'after';\n}\n",
+    );
+    std::fs::write(
+        f.0.join("new name:part.ts"),
+        "mutable checkout must not be read\n",
+    )
+    .unwrap();
+    std::fs::write(f.0.join("renderer.ts"), "uncommitted renderer\n").unwrap();
+    let repo = Repository::load(&f.0, None).unwrap();
+    let patch = repo.patch(&base, &tip).unwrap();
+    assert!(patch.contains("rename from"));
+    let mut source = Snapshot::new(&f.0, &base, &tip, &patch, Cancellation::default()).unwrap();
+    for (side, word) in [("original", "before"), ("modified", "after")] {
+        let page = source
+            .call(
+                "gander_read_source",
+                &json!({"path":"new name:part.ts","side":side,"start_line":1,"line_count":200}),
+            )
+            .unwrap();
+        assert_eq!(page["lines"][1]["text"], format!("  return '{word}';"));
+    }
+    let context = Evidence {
+        path: "renderer.ts".into(),
+        side: Side::Modified,
+        start_line: 1,
+        end_line: 1,
+    };
+    assert!(!source.scope.contains(&context));
+    let search = source
+        .call(
+            "gander_search_source",
+            &json!({"query":"save()","side":"modified","path_prefix":"renderer.ts","offset":0}),
+        )
+        .unwrap();
+    assert_eq!(search["hits"][0]["text"], "render(save());");
+    assert!(source.scope.contains(&context));
+    let old = source
+        .call(
+            "gander_search_source",
+            &json!({"query":"before","side":"original","path_prefix":"","offset":0}),
+        )
+        .unwrap();
+    assert_eq!(old["hits"][0]["path"], "new name:part.ts");
+    assert!(
+        source
+            .call(
+                "gander_read_source",
+                &json!({"path":"../outside","side":"modified","start_line":1,"line_count":10})
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn semantic_source_skips_oversized_lines_without_stalling_or_citing_them() {
+    use crate::{
+        acp::Cancellation,
+        semantic::{Evidence, Side},
+        semantic_source::Snapshot,
+    };
+    use serde_json::json;
+    let f = Fixture::new();
+    let base = f.commit("large.txt", "old\n");
+    let tip = f.commit(
+        "large.txt",
+        &format!(
+            "{}\n{}\nreadable\n",
+            "a".repeat(60_000),
+            "\t".repeat(15_000)
+        ),
+    );
+    let repo = Repository::load(&f.0, None).unwrap();
+    let patch = repo.patch(&base, &tip).unwrap();
+    let cancel = Cancellation::default();
+    let mut source = Snapshot::new(&f.0, &base, &tip, &patch, cancel.clone()).unwrap();
+    let page = source
+        .call(
+            "gander_read_source",
+            &json!({"path":"large.txt","side":"modified","start_line":1,"line_count":200}),
+        )
+        .unwrap();
+    assert_eq!(page["lines"].as_array().unwrap().len(), 3);
+    assert!(page["lines"][0]["text"].is_null() && page["lines"][1]["text"].is_null());
+    assert_eq!(page["lines"][2]["text"], "readable");
+    let evidence = Evidence {
+        path: "large.txt".into(),
+        side: Side::Modified,
+        start_line: 1,
+        end_line: 1,
+    };
+    assert!(!source.scope.contains(&evidence));
+    assert!(source.scope.contains(&Evidence {
+        start_line: 3,
+        end_line: 3,
+        ..evidence
+    }));
+    cancel.cancel();
+    assert!(
+        source
+            .call("gander_list_changes", &json!({"offset":0}))
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled")
+    );
+}
+
+#[test]
+fn semantic_source_distinguishes_added_deleted_and_binary_sides() {
+    use crate::{acp::Cancellation, semantic_source::Snapshot};
+    use serde_json::json;
+    let f = Fixture::new();
+    let base = f.commit("deleted.txt", "original text\n");
+    git(&f.0, &["rm", "deleted.txt"]).unwrap();
+    std::fs::write(f.0.join("added.txt"), "new text\n").unwrap();
+    std::fs::write(f.0.join("binary.bin"), [0, 1, 2, 3]).unwrap();
+    git(&f.0, &["add", "."]).unwrap();
+    git(&f.0, &["commit", "-qm", "added, deleted and binary files"]).unwrap();
+    let tip = git(&f.0, &["rev-parse", "HEAD"]).unwrap().trim().to_owned();
+    let repo = Repository::load(&f.0, None).unwrap();
+    let patch = repo.patch(&base, &tip).unwrap();
+    let mut source = Snapshot::new(&f.0, &base, &tip, &patch, Cancellation::default()).unwrap();
+    for (path, side, text) in [
+        ("added.txt", "modified", "new text"),
+        ("deleted.txt", "original", "original text"),
+    ] {
+        let page = source
+            .call(
+                "gander_read_source",
+                &json!({"path":path,"side":side,"start_line":1,"line_count":20}),
+            )
+            .unwrap();
+        assert_eq!(page["lines"][0]["text"], text);
+    }
+    for (path, side) in [("added.txt", "original"), ("deleted.txt", "modified")] {
+        assert!(
+            source
+                .call(
+                    "gander_read_source",
+                    &json!({"path":path,"side":side,"start_line":1,"line_count":20})
+                )
+                .is_err()
+        );
+    }
+    let binary = source
+        .call(
+            "gander_read_source",
+            &json!({"path":"binary.bin","side":"modified","start_line":1,"line_count":20}),
+        )
+        .unwrap();
+    assert!(binary["lines"][0]["text"].is_null());
+    assert!(binary["lines"][0]["omitted"].as_str().is_some());
+}
+
+#[test]
 fn mcp_setup_is_project_local_preserves_other_servers_and_is_repeatable() {
     use crate::mcp_setup::{self, Client};
     let fixture = Fixture::new();

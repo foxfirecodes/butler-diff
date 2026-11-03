@@ -1,5 +1,21 @@
 use crate::session::Selection;
 
+pub fn next_index(
+    files: &[String],
+    current: Option<&str>,
+    forward: bool,
+    eligible: impl Fn(&str) -> bool,
+) -> Option<usize> {
+    let current = current.and_then(|path| files.iter().position(|p| p == path));
+    if forward {
+        (current.map_or(0, |i| i + 1)..files.len()).find(|&i| eligible(&files[i]))
+    } else {
+        (0..current.unwrap_or(files.len()))
+            .rev()
+            .find(|&i| eligible(&files[i]))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Visit {
     pub selection: Selection,
@@ -45,6 +61,14 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn review_steps_respect_direction_eligibility_and_boundaries() {
+        let files = vec!["a".into(), "b".into(), "c".into()];
+        assert_eq!(next_index(&files, None, true, |_| true), Some(0));
+        assert_eq!(next_index(&files, Some("a"), true, |p| p != "b"), Some(2));
+        assert_eq!(next_index(&files, Some("c"), true, |_| true), None);
+        assert_eq!(next_index(&files, Some("b"), false, |_| true), Some(0));
+    }
     fn visit(branch: &str, file: &str) -> Visit {
         Visit {
             selection: Selection {

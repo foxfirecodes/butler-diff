@@ -9,6 +9,7 @@ enum Target {
     File(String),
     Branch(String, String),
     Stack(Selection, Vec<String>),
+    Decision(usize),
 }
 
 impl ReviewApp {
@@ -77,6 +78,17 @@ impl ReviewApp {
                 }
             }
         }
+        if let Some(review) = &self.semantic.review {
+            sections.push((
+                "Decisions".into(),
+                review
+                    .decisions
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| (d.title.clone(), Target::Decision(i)))
+                    .collect(),
+            ));
+        }
         let state = cx.new(|cx| CommandState::new(window, cx));
         let owner = cx.weak_entity();
         let focus_on_mount = Rc::new(std::cell::Cell::new(true));
@@ -132,6 +144,13 @@ impl ReviewApp {
                                         view.selection = Some(selection);
                                         view.load_diff(cx);
                                     }
+                                    Target::Decision(index) => {
+                                        if !view.show_semantic {
+                                            view.show_semantic = true;
+                                            view.reset_panel_layout(cx);
+                                        }
+                                        view.select_decision(index, cx);
+                                    }
                                 }
                                 window.focus(&view.focus, cx);
                                 cx.notify();
@@ -144,6 +163,7 @@ impl ReviewApp {
                                     Target::File(path) => vec![path.clone()],
                                     Target::Stack(_, branches) => branches.clone(),
                                     Target::Branch(_, _) => vec![label.clone()],
+                                    Target::Decision(_) => vec![label.clone()],
                                 };
                                 CommandItem::new().label(label.clone()).keywords(keywords)
                             }),

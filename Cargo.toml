@@ -9,6 +9,7 @@ anyhow = "1"
 async-channel = "2"
 gpui-kit = { version = "0.8.1", features = ["syntect"] }
 gpui-fps = "0.8.1"
+libc = "0.2"
 notify = "8.2"
 regex = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }

@@ -1881,6 +1881,7 @@ dependencies = [
  "async-channel",
  "gpui-fps",
  "gpui-kit",
+ "libc",
  "notify",
  "regex",
  "rusqlite",

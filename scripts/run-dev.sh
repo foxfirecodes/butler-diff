@@ -13,9 +13,16 @@ stopping = []
 for line in processes.splitlines():
     fields = line.strip().split(None, 1)
     if len(fields) == 2 and (fields[1] == executable or fields[1].startswith(executable + ' ')):
+        pid = int(fields[0])
         try:
-            os.kill(int(fields[0]), signal.SIGTERM)
-            stopping.append(int(fields[0]))
+            if fields[1] == executable + ' --semantic-acp':
+                # Inference helpers own a separate process group. Reap the whole
+                # group, including Codex, even if its GUI parent already exited.
+                if os.getpgid(pid) == pid:
+                    os.killpg(pid, signal.SIGKILL)
+            else:
+                os.kill(pid, signal.SIGTERM)
+                stopping.append(pid)
         except ProcessLookupError:
             pass
 deadline = time.monotonic() + 5
@@ -30,4 +37,6 @@ while stopping:
     if stopping:
         time.sleep(0.05)
 PY
-open -g "$app" --args --background "$@"
+log="$PWD/target/debug/gander-dev.log"
+: > "$log"
+open -g "$app" --stderr "$log" --args --background "$@"

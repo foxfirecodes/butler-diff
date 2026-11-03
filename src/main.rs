@@ -1,3 +1,4 @@
+mod acp;
 mod comments;
 mod file_groups;
 mod jump;
@@ -7,6 +8,9 @@ mod mcp_setup;
 mod navigation;
 mod repository;
 mod review_ui;
+mod semantic;
+mod semantic_source;
+mod semantic_ui;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -65,6 +69,15 @@ actions!(
         NavigateBack,
         NavigateForward,
         OpenJump,
+        ToggleSemantic,
+        NextReviewItem,
+        PreviousReviewItem,
+        NextChange,
+        PreviousChange,
+        InspectAndAdvance,
+        UndoInspection,
+        NextUninspected,
+        ToggleImports,
         Quit
     ]
 );
@@ -270,6 +283,8 @@ struct ReviewApp {
     comment_pending: bool,
     comment_generation: u64,
     show_comments: bool,
+    show_semantic: bool,
+    semantic: semantic_ui::State,
     show_branches: bool,
     sidebars_swapped: bool,
     branch_sidebar_width: Pixels,
@@ -333,6 +348,20 @@ impl ReviewApp {
                 }
                 DiffEvent::FileExpanded(path) => {
                     this.collapsed_files.remove(path.as_str());
+                    if !this.semantic.expanded_imports.contains(path.as_str())
+                        && this
+                            .semantic
+                            .sources
+                            .get(path.as_str())
+                            .is_some_and(semantic::SourceFile::only_folded_imports)
+                    {
+                        this.semantic.expanded_imports.insert(path.to_string());
+                        this.sync_diff_files(cx);
+                    }
+                }
+                DiffEvent::SelectionChanged(Some(range)) => {
+                    this.focused_file = Some(range.path().to_string());
+                    this.sync_semantic_selection(range);
                 }
                 _ => return,
             }
@@ -369,6 +398,8 @@ impl ReviewApp {
             comment_pending: false,
             comment_generation: 0,
             show_comments: false,
+            show_semantic: true,
+            semantic: semantic_ui::State::default(),
             show_branches: true,
             sidebars_swapped: false,
             branch_sidebar_width: px(300.),
@@ -465,6 +496,7 @@ impl ReviewApp {
     }
 
     fn clear_viewed(&mut self) {
+        self.semantic = semantic_ui::State::default();
         self.focused_file = None;
         self.current_comment_ids.clear();
         self.viewed_files = Arc::default();
@@ -527,7 +559,7 @@ impl ReviewApp {
         else {
             return;
         };
-        self.save_viewed(vec![file], !self.viewed_files.contains(path), cx);
+        self.save_viewed(vec![file], !self.viewed_files.contains(path), false, cx);
     }
 
     fn toggle_group_viewed(&mut self, key: &str, cx: &mut Context<Self>) {
@@ -545,10 +577,16 @@ impl ReviewApp {
             .iter()
             .all(|file| self.viewed_files.contains(file.path().as_str()));
         let files = bucket.files.into_iter().cloned().collect();
-        self.save_viewed(files, viewed, cx);
+        self.save_viewed(files, viewed, false, cx);
     }
 
-    fn save_viewed(&mut self, files: Vec<DiffFile>, viewed: bool, cx: &mut Context<Self>) {
+    fn save_viewed(
+        &mut self,
+        files: Vec<DiffFile>,
+        viewed: bool,
+        advance: bool,
+        cx: &mut Context<Self>,
+    ) {
         if files.is_empty()
             || files
                 .iter()
@@ -592,6 +630,29 @@ impl ReviewApp {
                         Ok(versions) => {
                             view.viewed_epoch = view.viewed_epoch.wrapping_add(1);
                             let same_comparison = view.loaded.as_ref() == Some(&key);
+                            // Choose from the initiating file before collapse changes
+                            // the viewport. A later user navigation keeps its place.
+                            let next_file = if advance
+                                && same_comparison
+                                && !view.show_semantic
+                                && view
+                                    .current_visit(cx)
+                                    .is_some_and(|visit| visit.file == paths[0])
+                            {
+                                let visible: Vec<_> = view
+                                    .files
+                                    .iter()
+                                    .filter(|f| {
+                                        !view.file_hidden(f)
+                                            && file_groups::matches_filter(f, &view.query)
+                                    })
+                                    .map(|f| f.path().to_string())
+                                    .collect();
+                                navigation::next_index(&visible, Some(&paths[0]), true, |_| true)
+                                    .map(|i| visible[i].clone())
+                            } else {
+                                None
+                            };
                             let current: HashMap<_, _> = view
                                 .files
                                 .iter()
@@ -622,6 +683,15 @@ impl ReviewApp {
                             view.sync_collapsed_files(cx);
                             if !same_comparison {
                                 view.reload_viewed(cx);
+                            }
+                            if same_comparison && advance {
+                                view.semantic.undo = Some(semantic_ui::Undo::File {
+                                    comparison: key.clone(),
+                                    path: paths[0].clone(),
+                                });
+                                if let Some(path) = next_file {
+                                    view.visit_file(&path, cx);
+                                }
                             }
                         }
                         Err(error) => {
@@ -816,17 +886,21 @@ impl ReviewApp {
                     let files = DiffFile::parse(&patch)
                         .map_err(|e| anyhow::anyhow!("Couldn't parse git diff: {e}"))?;
                     let viewed = viewed::load(&repo, &base, &tip, &files);
-                    Ok::<_, anyhow::Error>((files, viewed))
+                    let sources = semantic::sources(&patch)?;
+                    Ok::<_, anyhow::Error>((files, viewed, patch, sources))
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
                 view.loading_diff = false;
                 view.pending_diff = None;
                 match result {
-                    Ok((files, viewed)) => {
+                    Ok((files, viewed, patch, sources)) => {
                         view.loaded = Some(key);
                         view.loaded_selection = view.selection.clone();
                         view.files = files;
+                        view.semantic.patch = Arc::from(patch);
+                        view.semantic.sources =
+                            sources.into_iter().map(|s| (s.path.clone(), s)).collect();
                         view.sync_comment_anchors();
                         match viewed {
                             Ok(files) => view.viewed_files = Arc::new(files),
@@ -975,10 +1049,18 @@ impl ReviewApp {
     fn review_panels(&self, body: AnyElement, cx: &mut Context<Self>) -> impl IntoElement {
         let files = Some(
             resizable_panel()
-                .size(px(self.file_panel_width))
+                .size(px(if self.show_semantic {
+                    self.file_panel_width.max(440.)
+                } else {
+                    self.file_panel_width
+                }))
                 .fixed()
                 .size_range(px(220.)..px(750.))
-                .child(self.file_sidebar(cx)),
+                .child(if self.show_semantic {
+                    self.semantic_panel(cx).into_any_element()
+                } else {
+                    self.file_sidebar(cx).into_any_element()
+                }),
         );
         let comments = self.show_comments.then(|| {
             resizable_panel()
@@ -1144,14 +1226,42 @@ impl ReviewApp {
             .files
             .iter()
             .filter(|file| !self.file_hidden(file))
-            .cloned()
+            .map(|file| {
+                if !self
+                    .semantic
+                    .expanded_imports
+                    .contains(file.path().as_str())
+                    && let Some(folded) = self
+                        .semantic
+                        .sources
+                        .get(file.path().as_str())
+                        .and_then(|s| s.folded.as_ref())
+                {
+                    return folded.clone();
+                }
+                file.clone()
+            })
             .collect();
         self.diff.update(cx, |state, cx| state.set_files(files, cx));
         self.sync_collapsed_files(cx);
     }
 
     fn sync_collapsed_files(&self, cx: &mut Context<Self>) {
-        let paths = self.collapsed_files.iter().cloned().map(SharedString::from);
+        let paths = self
+            .collapsed_files
+            .iter()
+            .cloned()
+            .chain(
+                self.semantic
+                    .sources
+                    .iter()
+                    .filter(|(path, source)| {
+                        source.only_folded_imports()
+                            && !self.semantic.expanded_imports.contains(*path)
+                    })
+                    .map(|(path, _)| path.clone()),
+            )
+            .map(SharedString::from);
         self.diff
             .update(cx, |state, cx| state.set_collapsed_files(paths, cx));
     }
@@ -1930,12 +2040,29 @@ impl Render for ReviewApp {
             let app = cx.entity().downgrade();
             let comment_app = cx.entity().downgrade();
             let annotation_app = cx.entity().downgrade();
+            let import_app = cx.entity().downgrade();
             let annotations = self.comment_annotations();
             body = body.child(
                 Diff::new(&self.diff)
                     .soft_wrap(self.wrap)
                     .size_full()
                     .annotations(annotations)
+                    .render_header_title_suffix(move |file, _, cx| {
+                        import_app
+                            .update(cx, |view, cx| {
+                                if view
+                                    .semantic
+                                    .sources
+                                    .get(file.path().as_str())
+                                    .is_some_and(|s| s.folded_lines > 0)
+                                {
+                                    view.import_button(file.path(), cx).into_any_element()
+                                } else {
+                                    div().into_any_element()
+                                }
+                            })
+                            .unwrap_or_else(|_| div().into_any_element())
+                    })
                     .on_add_annotation(move |range, window, cx| {
                         let _ = comment_app
                             .update(cx, |view, cx| view.begin_comment(range, window, cx));
@@ -2026,6 +2153,17 @@ impl Render for ReviewApp {
             .text_sm()
             .on_action(cx.listener(|view, _: &Refresh, _, cx| view.refresh(cx)))
             .on_action(cx.listener(|view, _: &OpenJump, window, cx| view.open_jump(window, cx)))
+            .on_action(cx.listener(|view, _: &ToggleSemantic, _, cx| view.toggle_semantic(cx)))
+            .on_action(cx.listener(|view, _: &NextReviewItem, _, cx| view.step_review(true, false, cx)))
+            .on_action(cx.listener(|view, _: &PreviousReviewItem, _, cx| view.step_review(false, false, cx)))
+            .on_action(cx.listener(|view, _: &NextUninspected, _, cx| view.step_review(true, true, cx)))
+            .on_action(cx.listener(|view, _: &InspectAndAdvance, _, cx| view.inspect_and_advance(cx)))
+            .on_action(cx.listener(|view, _: &UndoInspection, _, cx| view.undo_inspection(cx)))
+            .on_action(cx.listener(|view, _: &NextChange, _, cx| view.diff.update(cx, |d,cx|d.next_change(cx))))
+            .on_action(cx.listener(|view, _: &PreviousChange, _, cx| view.diff.update(cx, |d,cx|d.previous_change(cx))))
+            .on_action(cx.listener(|view, _: &ToggleImports, _, cx| {
+                if let Some(visit) = view.current_visit(cx) { view.toggle_imports(&visit.file, cx); }
+            }))
             .on_action(cx.listener(|view, _: &NavigateBack, _, cx| view.navigate_history(false, cx)))
             .on_action(cx.listener(|view, _: &NavigateForward, _, cx| view.navigate_history(true, cx)))
             .on_action(cx.listener(|view, _: &OpenRepository, _, cx| view.open(cx)))
@@ -2082,6 +2220,9 @@ impl Render for ReviewApp {
                     .child(Button::new("jump").small().label("Jump… ⌘K")
                         .accessibility_label("Jump to file, branch, or stack")
                         .on_click(cx.listener(|view, _, window, cx| view.open_jump(window, cx))))
+                    .child(Button::new("semantic-toggle").small().selected(self.show_semantic).label("Semantic")
+                        .tooltip("Semantic review / file navigator · ⌘⇧S")
+                        .on_click(cx.listener(|view,_,_,cx|view.toggle_semantic(cx))))
                     .child(
                         div()
                             .flex_1()
@@ -2310,6 +2451,7 @@ fn main() -> anyhow::Result<()> {
             "--inspect" => inspect = true,
             "--background" => background = true,
             "--mcp" => serve_mcp = true,
+            "--semantic-acp" => return acp::serve(),
             "--setup-mcp" => {
                 setup_mcp = Some(mcp_setup::Client::parse(&args.next().ok_or_else(
                     || anyhow::anyhow!("--setup-mcp requires codex or claude"),
@@ -2397,6 +2539,51 @@ fn main() -> anyhow::Result<()> {
         cx.bind_keys([
             KeyBinding::new("cmd-r", Refresh, Some("Review")),
             KeyBinding::new("cmd-k", OpenJump, Some("Review")),
+            KeyBinding::new(
+                "cmd-shift-s",
+                ToggleSemantic,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-]",
+                NextReviewItem,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-[",
+                PreviousReviewItem,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "alt-down",
+                NextChange,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "alt-up",
+                PreviousChange,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-enter",
+                InspectAndAdvance,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "cmd-alt-u",
+                NextUninspected,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-z",
+                UndoInspection,
+                Some("Review && !Input && !CommentComposer"),
+            ),
+            KeyBinding::new(
+                "cmd-shift-l",
+                ToggleImports,
+                Some("Review && !Input && !CommentComposer"),
+            ),
             KeyBinding::new("alt-left", NavigateBack, Some("Review")),
             KeyBinding::new("alt-right", NavigateForward, Some("Review")),
             KeyBinding::new("alt-[", NavigateBack, Some("Review")),
@@ -2424,6 +2611,17 @@ fn main() -> anyhow::Result<()> {
                 MenuItem::action("Set Up MCP…", SetupMcp),
                 MenuItem::separator(),
                 MenuItem::action("Close Window", CloseWindow),
+            ]),
+            Menu::new("Review").items([
+                MenuItem::action("Semantic Review / Files", ToggleSemantic),
+                MenuItem::action("Next Item", NextReviewItem),
+                MenuItem::action("Previous Item", PreviousReviewItem),
+                MenuItem::action("Next Change", NextChange),
+                MenuItem::action("Previous Change", PreviousChange),
+                MenuItem::action("Inspect and Advance", InspectAndAdvance),
+                MenuItem::action("Undo Inspection", UndoInspection),
+                MenuItem::action("Next Uninspected", NextUninspected),
+                MenuItem::action("Fold / Reveal Imports", ToggleImports),
             ]),
         ]);
         cx.on_window_closed(|cx, _| {
